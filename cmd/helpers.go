@@ -25,9 +25,20 @@ func loadLock() (*manifest.Lock, error) {
 
 // buildClients creates registry clients for all registries in the manifest.
 // Authenticates each one and prints status.
+// Each client is configured with a mirror factory so that mirrors listed in
+// amaru_registry.json are automatically fetched and merged on FetchIndex.
 func buildClients(ctx context.Context, m *manifest.Manifest, silent bool) (map[string]registry.Client, error) {
 	if !silent {
 		fmt.Println("Authenticating registries...")
+	}
+
+	// Mirror factory: creates unauthenticated clients for mirror URLs.
+	mirrorFactory := func(url string) (registry.Client, error) {
+		noAuth, err := registry.NewAuthenticator("none", "")
+		if err != nil {
+			return nil, err
+		}
+		return registry.NewGitHubClient(url, noAuth)
 	}
 
 	clients := make(map[string]registry.Client)
@@ -41,6 +52,8 @@ func buildClients(ctx context.Context, m *manifest.Manifest, silent bool) (map[s
 		if err != nil {
 			return nil, fmt.Errorf("registry %s: %w", alias, err)
 		}
+
+		client.WithMirrorFactory(mirrorFactory)
 
 		// Validate authentication
 		if _, err := auth.Token(ctx); err != nil && regConf.Auth != "none" {

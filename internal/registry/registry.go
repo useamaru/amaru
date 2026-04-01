@@ -9,12 +9,38 @@ import (
 
 // RegistryIndex is the parsed amaru_registry.json from the remote registry.
 type RegistryIndex struct {
-	AmaruVersion string                      `json:"amaru_version"`
-	UpdatedAt    string                      `json:"updated_at"`
-	Skills       map[string]RegistryEntry    `json:"skills,omitempty"`
-	Commands     map[string]RegistryEntry    `json:"commands,omitempty"`
-	Agents       map[string]RegistryEntry    `json:"agents,omitempty"`
-	Skillsets    map[string]SkillsetEntry    `json:"skillsets,omitempty"`
+	AmaruVersion string                   `json:"amaru_version"`
+	UpdatedAt    string                   `json:"updated_at"`
+	Mirrors      []string                 `json:"mirrors,omitempty"` // e.g. ["github:vercel-labs/agent-skills"]
+	Skills       map[string]RegistryEntry `json:"skills,omitempty"`
+	Commands     map[string]RegistryEntry `json:"commands,omitempty"`
+	Agents       map[string]RegistryEntry `json:"agents,omitempty"`
+	Skillsets    map[string]SkillsetEntry `json:"skillsets,omitempty"`
+}
+
+// MergeFrom merges skills, commands, agents, and skillsets from another index.
+// Existing entries in the receiver are NOT overwritten (primary registry wins).
+func (idx *RegistryIndex) MergeFrom(other *RegistryIndex) {
+	for name, entry := range other.Skills {
+		if _, exists := idx.Skills[name]; !exists {
+			idx.Skills[name] = entry
+		}
+	}
+	for name, entry := range other.Commands {
+		if _, exists := idx.Commands[name]; !exists {
+			idx.Commands[name] = entry
+		}
+	}
+	for name, entry := range other.Agents {
+		if _, exists := idx.Agents[name]; !exists {
+			idx.Agents[name] = entry
+		}
+	}
+	for name, entry := range other.Skillsets {
+		if _, exists := idx.Skillsets[name]; !exists {
+			idx.Skillsets[name] = entry
+		}
+	}
 }
 
 // EntriesForType returns the registry entries for a given item type.

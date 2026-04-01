@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/Masterminds/semver/v3"
@@ -18,13 +19,62 @@ import (
 const (
 	maxRetries    = 3
 	retryBaseWait = 500 * time.Millisecond
+	maxConcurrent = 10 // max parallel file downloads per directory
 )
+
+// ClientFactory creates a Client for a given registry URL with no authentication.
+// Used for resolving mirror registries.
+type ClientFactory func(url string) (Client, error)
+
+type repoFormat int
+
+const (
+	formatUnknown repoFormat = iota
+	formatAmaru              // amaru_registry.json at root
+	formatVercel             // skills/*/SKILL.md layout
+)
+
+// rateLimiter tracks a global backoff state shared across all concurrent requests
+// from a single client. When any request hits a 429, all goroutines pause.
+type rateLimiter struct {
+	mu         sync.Mutex
+	pauseUntil time.Time
+}
+
+func (r *rateLimiter) wait(ctx context.Context) error {
+	r.mu.Lock()
+	until := r.pauseUntil
+	r.mu.Unlock()
+
+	d := time.Until(until)
+	if d <= 0 {
+		return nil
+	}
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-time.After(d):
+		return nil
+	}
+}
+
+func (r *rateLimiter) backoff(d time.Duration) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	next := time.Now().Add(d)
+	if next.After(r.pauseUntil) {
+		r.pauseUntil = next
+	}
+}
 
 // GitHubClient implements Client using the GitHub API.
 type GitHubClient struct {
-	Owner string
-	Repo  string
-	Auth  Authenticator
+	Owner         string
+	Repo          string
+	Auth          Authenticator
+	rl            *rateLimiter
+	mirrorFactory ClientFactory
+	format        repoFormat // detected by FetchIndex
 }
 
 // NewGitHubClient creates a new GitHub registry client from a URL like "github:org/repo".
@@ -34,10 +84,18 @@ func NewGitHubClient(url string, auth Authenticator) (*GitHubClient, error) {
 		return nil, err
 	}
 	return &GitHubClient{
-		Owner: owner,
-		Repo:  repo,
-		Auth:  auth,
+		Owner:  owner,
+		Repo:   repo,
+		Auth:   auth,
+		rl:     &rateLimiter{},
+		format: formatUnknown,
 	}, nil
+}
+
+// WithMirrorFactory sets the factory used to resolve mirror URLs in registry indexes.
+func (c *GitHubClient) WithMirrorFactory(f ClientFactory) *GitHubClient {
+	c.mirrorFactory = f
+	return c
 }
 
 // parseGitHubURL parses various GitHub URL formats into owner and repo.
@@ -122,6 +180,10 @@ func isRetryable(statusCode int) bool {
 		statusCode == http.StatusGatewayTimeout
 }
 
+func isNotFound(err error) bool {
+	return err != nil && strings.Contains(err.Error(), "API returned 404")
+}
+
 func (c *GitHubClient) apiRequest(ctx context.Context, path string) ([]byte, error) {
 	url := fmt.Sprintf("https://api.github.com/repos/%s/%s/%s", c.Owner, c.Repo, path)
 
@@ -132,6 +194,11 @@ func (c *GitHubClient) apiRequest(ctx context.Context, path string) ([]byte, err
 
 	var lastErr error
 	for attempt := range maxRetries {
+		// Check shared rate limiter before each attempt
+		if err := c.rl.wait(ctx); err != nil {
+			return nil, err
+		}
+
 		req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 		if err != nil {
 			return nil, err
@@ -178,11 +245,12 @@ func (c *GitHubClient) apiRequest(ctx context.Context, path string) ([]byte, err
 						wait = secs
 					}
 				}
+				// Signal all concurrent goroutines to pause
+				c.rl.backoff(wait)
 			}
-			select {
-			case <-ctx.Done():
-				return nil, ctx.Err()
-			case <-time.After(wait):
+			// Wait via shared rate limiter (picks up backoff set above or by other goroutines)
+			if err := c.rl.wait(ctx); err != nil {
+				return nil, err
 			}
 		}
 	}
@@ -190,30 +258,188 @@ func (c *GitHubClient) apiRequest(ctx context.Context, path string) ([]byte, err
 	return nil, lastErr
 }
 
-// FetchIndex downloads and parses the registry.json from the default branch.
+// FetchIndex auto-detects the registry format and returns the index.
+// Tries amaru format (amaru_registry.json) first, then Vercel format (skills/*/SKILL.md).
+// If the index has mirrors, fetches and merges them (primary registry wins on conflict).
 func (c *GitHubClient) FetchIndex(ctx context.Context) (*RegistryIndex, error) {
+	var index *RegistryIndex
+
 	data, err := c.getFileContent(ctx, "amaru_registry.json", "")
-	if err != nil {
+	if err == nil {
+		c.format = formatAmaru
+		var idx RegistryIndex
+		if err := json.Unmarshal(data, &idx); err != nil {
+			return nil, fmt.Errorf("parsing registry index: %w", err)
+		}
+		initIndex(&idx)
+		index = &idx
+	} else if isNotFound(err) {
+		idx, vercelErr := c.fetchVercelIndex(ctx)
+		if vercelErr != nil {
+			return nil, fmt.Errorf("registry has neither amaru_registry.json nor skills/ directory: %w", vercelErr)
+		}
+		c.format = formatVercel
+		index = idx
+	} else {
 		return nil, fmt.Errorf("fetching registry index: %w", err)
 	}
 
-	var index RegistryIndex
-	if err := json.Unmarshal(data, &index); err != nil {
-		return nil, fmt.Errorf("parsing registry index: %w", err)
+	// Resolve mirrors — fetch each mirror's index and merge (primary wins)
+	if c.mirrorFactory != nil {
+		for _, mirrorURL := range index.Mirrors {
+			mirrorClient, err := c.mirrorFactory(mirrorURL)
+			if err != nil {
+				continue
+			}
+			mirrorIdx, err := mirrorClient.FetchIndex(ctx)
+			if err != nil {
+				continue
+			}
+			index.MergeFrom(mirrorIdx)
+		}
 	}
-	if index.Skills == nil {
-		index.Skills = make(map[string]RegistryEntry)
+
+	return index, nil
+}
+
+func initIndex(idx *RegistryIndex) {
+	if idx.Skills == nil {
+		idx.Skills = make(map[string]RegistryEntry)
 	}
-	if index.Commands == nil {
-		index.Commands = make(map[string]RegistryEntry)
+	if idx.Commands == nil {
+		idx.Commands = make(map[string]RegistryEntry)
 	}
-	if index.Agents == nil {
-		index.Agents = make(map[string]RegistryEntry)
+	if idx.Agents == nil {
+		idx.Agents = make(map[string]RegistryEntry)
 	}
-	if index.Skillsets == nil {
-		index.Skillsets = make(map[string]SkillsetEntry)
+	if idx.Skillsets == nil {
+		idx.Skillsets = make(map[string]SkillsetEntry)
 	}
-	return &index, nil
+}
+
+// fetchVercelIndex builds a RegistryIndex from skills/*/SKILL.md in a Vercel-format repo.
+// SKILL.md files are fetched in parallel.
+func (c *GitHubClient) fetchVercelIndex(ctx context.Context) (*RegistryIndex, error) {
+	body, err := c.apiRequest(ctx, "contents/skills")
+	if err != nil {
+		return nil, fmt.Errorf("listing skills/ directory: %w", err)
+	}
+
+	var entries []struct {
+		Name string `json:"name"`
+		Type string `json:"type"`
+	}
+	if err := json.Unmarshal(body, &entries); err != nil {
+		return nil, fmt.Errorf("parsing skills directory: %w", err)
+	}
+
+	var skillDirs []string
+	for _, e := range entries {
+		if e.Type == "dir" {
+			skillDirs = append(skillDirs, e.Name)
+		}
+	}
+
+	if len(skillDirs) == 0 {
+		return nil, fmt.Errorf("no skill directories found in skills/")
+	}
+
+	type skillResult struct {
+		description string
+		err         error
+	}
+	results := make([]skillResult, len(skillDirs))
+
+	sem := make(chan struct{}, maxConcurrent)
+	var wg sync.WaitGroup
+
+	for i, dir := range skillDirs {
+		wg.Add(1)
+		go func(idx int, skillName string) {
+			defer wg.Done()
+			select {
+			case sem <- struct{}{}:
+			case <-ctx.Done():
+				results[idx].err = ctx.Err()
+				return
+			}
+			defer func() { <-sem }()
+
+			data, err := c.getFileContent(ctx, "skills/"+skillName+"/SKILL.md", "")
+			if err != nil {
+				// No SKILL.md — skip without error (keep empty description)
+				return
+			}
+			fm := parseSkillFrontmatter(data)
+			results[idx].description = fm.Description
+		}(i, dir)
+	}
+	wg.Wait()
+
+	for _, r := range results {
+		if r.err != nil {
+			return nil, r.err
+		}
+	}
+
+	idx := &RegistryIndex{
+		Skills:    make(map[string]RegistryEntry),
+		Commands:  make(map[string]RegistryEntry),
+		Agents:    make(map[string]RegistryEntry),
+		Skillsets: make(map[string]SkillsetEntry),
+	}
+	for i, dir := range skillDirs {
+		idx.Skills[dir] = RegistryEntry{
+			Description: results[i].description,
+		}
+	}
+
+	return idx, nil
+}
+
+// skillFrontmatter holds parsed YAML frontmatter fields from a SKILL.md file.
+type skillFrontmatter struct {
+	Name        string
+	Description string
+}
+
+// parseSkillFrontmatter extracts name and description from YAML frontmatter.
+// Only reads the first value for each key (no multi-line support needed).
+func parseSkillFrontmatter(data []byte) skillFrontmatter {
+	var fm skillFrontmatter
+	lines := strings.Split(string(data), "\n")
+	inFrontmatter := false
+
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "---" {
+			if !inFrontmatter {
+				inFrontmatter = true
+				continue
+			}
+			break // end of frontmatter
+		}
+		if !inFrontmatter {
+			continue
+		}
+		k, v, ok := strings.Cut(trimmed, ":")
+		if !ok {
+			continue
+		}
+		v = strings.TrimSpace(v)
+		// Strip surrounding quotes
+		if len(v) >= 2 && v[0] == '"' && v[len(v)-1] == '"' {
+			v = v[1 : len(v)-1]
+		}
+		switch k {
+		case "name":
+			fm.Name = v
+		case "description":
+			fm.Description = v
+		}
+	}
+
+	return fm
 }
 
 // ListVersions returns all available versions for an item by listing git tags.
@@ -254,19 +480,20 @@ func (c *GitHubClient) ListVersions(ctx context.Context, itemType, name string) 
 }
 
 // DownloadFiles downloads all files for a specific item.
-// Always downloads from the default branch — the version parameter is recorded
-// in the lock file for tracking but not used as a git ref, since registries
-// are monorepos that don't necessarily use per-item version tags.
+// Format-aware: uses .amaru_registry/ for amaru-format repos, skills/ for Vercel-format.
+// Always downloads from default branch — version is metadata only.
 func (c *GitHubClient) DownloadFiles(ctx context.Context, itemType, name, version string) ([]File, error) {
-	// Determine the directory path in the repo (.amaru_registry/ prefix)
-	dirPath := ".amaru_registry/" + types.ItemType(itemType).DirName() + "/" + name
-
+	var dirPath string
+	if c.format == formatVercel {
+		dirPath = "skills/" + name
+	} else {
+		dirPath = ".amaru_registry/" + types.ItemType(itemType).DirName() + "/" + name
+	}
 	return c.downloadDirectory(ctx, dirPath, "", "")
 }
 
 // FetchSkillsetManifest downloads the manifest.json for a skillset from the registry.
-// Always fetches from the default branch — skillsets are metadata that reference
-// individually versioned items, so they don't have their own version tags.
+// Always fetches from the default branch.
 func (c *GitHubClient) FetchSkillsetManifest(ctx context.Context, name, _ string) (*SkillsetManifest, error) {
 	filePath := ".amaru_registry/skillsets/" + name + "/manifest.json"
 	data, err := c.getFileContent(ctx, filePath, "")
@@ -283,6 +510,7 @@ func (c *GitHubClient) FetchSkillsetManifest(ctx context.Context, name, _ string
 }
 
 // downloadDirectory recursively downloads all files in a directory at a given ref.
+// Files within each directory level are fetched in parallel.
 func (c *GitHubClient) downloadDirectory(ctx context.Context, dirPath, ref, relativeBase string) ([]File, error) {
 	path := fmt.Sprintf("contents/%s", dirPath)
 	if ref != "" {
@@ -295,41 +523,86 @@ func (c *GitHubClient) downloadDirectory(ctx context.Context, dirPath, ref, rela
 	}
 
 	var entries []struct {
-		Name        string `json:"name"`
-		Path        string `json:"path"`
-		Type        string `json:"type"`
-		Content     string `json:"content"`
-		Encoding    string `json:"encoding"`
-		DownloadURL string `json:"download_url"`
+		Name string `json:"name"`
+		Path string `json:"path"`
+		Type string `json:"type"`
 	}
 	if err := json.Unmarshal(body, &entries); err != nil {
 		return nil, fmt.Errorf("parsing directory listing: %w", err)
 	}
 
-	var files []File
-	for _, entry := range entries {
-		relativePath := entry.Name
-		if relativeBase != "" {
-			relativePath = relativeBase + "/" + entry.Name
-		}
+	type fileWork struct {
+		apiPath string
+		relPath string
+	}
+	type dirWork struct {
+		apiPath string
+		relPath string
+	}
 
+	var fileWorks []fileWork
+	var dirWorks []dirWork
+
+	for _, entry := range entries {
+		relPath := entry.Name
+		if relativeBase != "" {
+			relPath = relativeBase + "/" + entry.Name
+		}
 		switch entry.Type {
 		case "file":
-			content, err := c.getFileContent(ctx, entry.Path, ref)
-			if err != nil {
-				return nil, fmt.Errorf("downloading %s: %w", entry.Path, err)
-			}
-			files = append(files, File{
-				Path:    relativePath,
-				Content: content,
-			})
+			fileWorks = append(fileWorks, fileWork{entry.Path, relPath})
 		case "dir":
-			subFiles, err := c.downloadDirectory(ctx, entry.Path, ref, relativePath)
-			if err != nil {
-				return nil, err
-			}
-			files = append(files, subFiles...)
+			dirWorks = append(dirWorks, dirWork{entry.Path, relPath})
 		}
+	}
+
+	// Fetch all files at this level in parallel
+	type fileResult struct {
+		file File
+		err  error
+	}
+	fileResults := make([]fileResult, len(fileWorks))
+
+	sem := make(chan struct{}, maxConcurrent)
+	var wg sync.WaitGroup
+
+	for i, fw := range fileWorks {
+		wg.Add(1)
+		go func(idx int, apiPath, relPath string) {
+			defer wg.Done()
+			select {
+			case sem <- struct{}{}:
+			case <-ctx.Done():
+				fileResults[idx].err = ctx.Err()
+				return
+			}
+			defer func() { <-sem }()
+
+			content, err := c.getFileContent(ctx, apiPath, ref)
+			if err != nil {
+				fileResults[idx].err = err
+				return
+			}
+			fileResults[idx].file = File{Path: relPath, Content: content}
+		}(i, fw.apiPath, fw.relPath)
+	}
+	wg.Wait()
+
+	var files []File
+	for _, r := range fileResults {
+		if r.err != nil {
+			return nil, r.err
+		}
+		files = append(files, r.file)
+	}
+
+	// Recurse into subdirectories (sequential — subdirs are rare)
+	for _, dw := range dirWorks {
+		subFiles, err := c.downloadDirectory(ctx, dw.apiPath, ref, dw.relPath)
+		if err != nil {
+			return nil, err
+		}
+		files = append(files, subFiles...)
 	}
 
 	return files, nil
