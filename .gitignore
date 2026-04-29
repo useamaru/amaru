@@ -8,3 +8,7 @@ amaru.exe
 
 # OS
 .DS_Store
+
+# Nix builds
+
+result
