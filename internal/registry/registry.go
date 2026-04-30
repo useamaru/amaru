@@ -136,9 +136,15 @@ type SkillsetEntry struct {
 }
 
 // SkillsetItem is one member of a skillset.
+//
+// Registry is optional: when set, the member is sourced from that registry
+// alias (the consumer must have it configured in amaru.json). When empty,
+// the member is sourced from the skillset's own home registry — the
+// pre-existing single-registry behavior.
 type SkillsetItem struct {
-	Type string `json:"type"` // "skill", "command", or "agent"
-	Name string `json:"name"`
+	Type     string `json:"type"` // "skill", "command", or "agent"
+	Name     string `json:"name"`
+	Registry string `json:"registry,omitempty"`
 }
 
 // ItemManifest is the manifest.json inside a skill/command directory in the registry.

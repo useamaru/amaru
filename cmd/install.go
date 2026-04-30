@@ -187,14 +187,47 @@ func installSkillset(ctx context.Context, name string, spec manifest.SkillsetSpe
 		skillset.Items = ssManifest.ToSkillsetItems()
 	}
 
+	// Cache per-registry indexes so cross-registry skillsets only fetch
+	// each alias' index once, not once per member.
+	indexCache := map[string]*registry.RegistryIndex{regAlias: idx}
+	resolveItemRegistry := func(item registry.SkillsetItem) (string, registry.Client, *registry.RegistryIndex, error) {
+		alias := item.Registry
+		if alias == "" {
+			alias = regAlias
+		}
+		if _, configured := m.Registries[alias]; !configured {
+			return "", nil, nil, fmt.Errorf(
+				"skillset %q references registry %q which is not configured in amaru.json (configure it under \"registries\" or remove the cross-registry reference)",
+				name, alias)
+		}
+		c, ok := clients[alias]
+		if !ok {
+			return "", nil, nil, fmt.Errorf("no client built for registry %q", alias)
+		}
+		if cached, ok := indexCache[alias]; ok {
+			return alias, c, cached, nil
+		}
+		fetched, err := c.FetchIndex(ctx)
+		if err != nil {
+			return "", nil, nil, fmt.Errorf("fetching index for registry %q: %w", alias, err)
+		}
+		indexCache[alias] = fetched
+		return alias, c, fetched, nil
+	}
+
 	var digestItems []string
 	var memberList []string
 	for _, item := range skillset.Items {
 		itemType := types.ItemType(item.Type)
-		entries := idx.EntriesForType(itemType)
+
+		itemAlias, itemClient, itemIdx, err := resolveItemRegistry(item)
+		if err != nil {
+			return err
+		}
+		entries := itemIdx.EntriesForType(itemType)
 		entry, ok := entries[item.Name]
 		if !ok {
-			ui.Warn("  %s %q not found in registry, skipping", item.Type, item.Name)
+			ui.Warn("  %s %q not found in registry %q, skipping", item.Type, item.Name, itemAlias)
 			continue
 		}
 
@@ -209,16 +242,16 @@ func installSkillset(ctx context.Context, name string, spec manifest.SkillsetSpe
 					if lockVersion == "" {
 						lockVersion = "latest"
 					}
-					digestItems = append(digestItems, fmt.Sprintf("%s/%s/%s", item.Type, item.Name, lockVersion))
+					digestItems = append(digestItems, fmt.Sprintf("%s/%s/%s@%s", item.Type, item.Name, lockVersion, itemAlias))
 					memberList = append(memberList, fmt.Sprintf("%s/%s", item.Type, item.Name))
 					continue
 				}
 			}
 		}
 
-		files, err := client.DownloadFiles(ctx, item.Type, item.Name, version)
+		files, err := itemClient.DownloadFiles(ctx, item.Type, item.Name, version)
 		if err != nil {
-			return fmt.Errorf("downloading %s %q: %w", item.Type, item.Name, err)
+			return fmt.Errorf("downloading %s %q from registry %q: %w", item.Type, item.Name, itemAlias, err)
 		}
 
 		hash, err := installer.Install(".", item.Type, item.Name, files)
@@ -230,16 +263,22 @@ func installSkillset(ctx context.Context, name string, spec manifest.SkillsetSpe
 		if lockVersion == "" {
 			lockVersion = "latest"
 		}
-		lockEntries[item.Name] = manifest.NewLockedEntry(lockVersion, regAlias, hash)
+		lockEntries[item.Name] = manifest.NewLockedEntry(lockVersion, itemAlias, hash)
 
-		digestItems = append(digestItems, fmt.Sprintf("%s/%s/%s", item.Type, item.Name, lockVersion))
+		// Encode the source alias into the digest so cross-registry skillsets
+		// invalidate correctly when an item moves to a different registry.
+		digestItems = append(digestItems, fmt.Sprintf("%s/%s/%s@%s", item.Type, item.Name, lockVersion, itemAlias))
 		memberList = append(memberList, fmt.Sprintf("%s/%s", item.Type, item.Name))
 
 		displayVersion := version
 		if displayVersion == "" {
 			displayVersion = "latest"
 		}
-		ui.Check("  %s %s@%s", item.Type, item.Name, displayVersion)
+		if itemAlias != regAlias {
+			ui.Check("  %s %s@%s [%s]", item.Type, item.Name, displayVersion, itemAlias)
+		} else {
+			ui.Check("  %s %s@%s", item.Type, item.Name, displayVersion)
+		}
 	}
 
 	lock.Skillsets[name] = manifest.LockedSkillset{

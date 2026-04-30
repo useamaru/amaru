@@ -34,6 +34,8 @@ amaru (CLI entry point)
 10. **Repo Migrate (in-place)**: `cmd/repo_migrate.go` → `scaffold.MigrateInPlace(dir, opts)` → classify state via 7-row recovery matrix → write `.migrating` journal → rename `.amaru_registry/<dir>` → `<dir>` → rewrite sparse profiles (anchored prefix, with `.bak`) → atomic `amaru_registry.json` rewrite (`amaru_version: "2"`) → remove journal
 11. **Repo Migrate (remote)**: `cmd/repo_migrate.go` (URL form) → `scaffold.MigrateRemote(ctx, url, opts)` → mkdtemp + signal-cleanup handler → `gitRunner` clone → record HEAD → checkout side branch (default `migration/flat-layout`) → `MigrateInPlace` → `git add -A` + commit → fetch + ancestry check → push → print PR hint
 12. **Mirror merge**: `registry.GitHubClient.FetchIndex()` → if index has `Mirrors[]`, fetch each via `mirrorFactory` → `index.MergeFrom(mirrorIdx, mirrorURL)` stamps each new entry's runtime-only `Source` field with the mirror URL → `cmd/browse.go` and `cmd/list.go` annotate output when `Source != ""`
+13. **Synthesized-source discovery (foreign registries)**: `registry.GitHubClient.fetchSynthesizedIndex()` → for each item type, `scanSynthesizedType()` lists `<type>s/` and probes each child for `<TYPE>.md`/`<type>.md`. Hits become flat-named items. Misses fall back to `scanSynthesizedNamespace()` which lists one level deeper and probes each grandchild — hits become items named `<category>/<grandchild>`. Recursion stops at depth 1.
+14. **Cross-registry skillset install**: `cmd/install.go:installSkillset()` → resolve skillset's home alias → for each item, resolve effective alias (item.Registry || home), look up the alias in the consumer's manifest (error if missing), fetch that alias's index (cached per skillset run), download via the per-item client, and lock with the per-item alias.
 
 ## Important Types
 
@@ -42,6 +44,7 @@ amaru (CLI entry point)
 - `manifest.DependencySpec` — version constraint + optional registry + optional group
 - `registry.RegistryIndex` — parsed amaru_registry.json from remote (entries + skillsets, includes AmaruVersion)
 - `registry.RegistryEntry` / `registry.SkillsetEntry` — entries carry a runtime-only `Source string \`json:"-"\`` populated by `MergeFrom` for mirror-contributed entries
+- `registry.SkillsetItem` — `{Type, Name, Registry}`; non-empty `Registry` selects a different consumer-side registry alias for that single member (cross-registry skillsets)
 - `registry.Layout` — `LayoutNested` (v1) vs `LayoutFlat` (v2); methods compute filesystem and slash-path locations of items, context, sparse profiles, skillset manifests
 - `registry.Client` — interface for FetchIndex, ListVersions, DownloadFiles, FetchSkillsetManifest
 - `scaffold.MigrateOptions` / `RemoteMigrateOptions` / `MigrationResult` / `MigrationStatus` — migration API surface

@@ -158,13 +158,34 @@ func runRepoAddSkillset(dir, name string, idx *registry.RegistryIndex) error {
 		return fmt.Errorf("skillset %q already exists in registry", name)
 	}
 
-	// Parse and validate items
+	// Parse and validate items.
+	//
+	// Item syntax: <type>/<name>[@<registry>]
+	//   skill/foo          → member from this registry
+	//   skill/foo@platform → member sourced from registry alias "platform"
+	//                        (consumer must have it configured in amaru.json)
+	//
+	// The publisher cannot validate that consumers will have the named registry
+	// configured — they cooperate via convention. We do, however, refuse to
+	// list a same-registry member (no '@' suffix) that doesn't exist in this
+	// registry's index, since that's catchable here.
 	var items []registry.SkillsetItem
 	for _, raw := range strings.Split(repoAddItems, ",") {
 		raw = strings.TrimSpace(raw)
+
+		// Split off optional @registry suffix.
+		var itemRegistry string
+		if at := strings.LastIndex(raw, "@"); at != -1 {
+			itemRegistry = strings.TrimSpace(raw[at+1:])
+			raw = strings.TrimSpace(raw[:at])
+			if itemRegistry == "" {
+				return fmt.Errorf("invalid item format %q: trailing '@' but no registry alias", raw)
+			}
+		}
+
 		parts := strings.SplitN(raw, "/", 2)
 		if len(parts) != 2 {
-			return fmt.Errorf("invalid item format %q: expected type/name (e.g., skill/foo)", raw)
+			return fmt.Errorf("invalid item format %q: expected type/name[@registry] (e.g., skill/foo or skill/foo@platform)", raw)
 		}
 		itemType := types.ItemType(parts[0])
 		itemName := parts[1]
@@ -173,15 +194,19 @@ func runRepoAddSkillset(dir, name string, idx *registry.RegistryIndex) error {
 			return fmt.Errorf("invalid type %q in item %q", parts[0], raw)
 		}
 
-		// Validate member exists in index
-		entries := idx.EntriesForType(itemType)
-		if _, exists := entries[itemName]; !exists {
-			return fmt.Errorf("%s %q not found in registry (all skillset members must exist)", itemType.Singular(), itemName)
+		// For same-registry members, validate they exist in this index.
+		// Cross-registry members can't be validated at publish time.
+		if itemRegistry == "" {
+			entries := idx.EntriesForType(itemType)
+			if _, exists := entries[itemName]; !exists {
+				return fmt.Errorf("%s %q not found in registry (all same-registry skillset members must exist; use type/name@<alias> to reference other registries)", itemType.Singular(), itemName)
+			}
 		}
 
 		items = append(items, registry.SkillsetItem{
-			Type: itemType.Singular(),
-			Name: itemName,
+			Type:     itemType.Singular(),
+			Name:     itemName,
+			Registry: itemRegistry,
 		})
 	}
 

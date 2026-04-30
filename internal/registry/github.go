@@ -87,6 +87,9 @@ type GitHubClient struct {
 	mirrorFactory ClientFactory
 	layout        Layout
 	source        indexSource
+	// apiBase overrides the GitHub API base URL. Empty means production
+	// (https://api.github.com). Tests inject httptest server URLs here.
+	apiBase string
 }
 
 // NewGitHubClient creates a new GitHub registry client from a URL like "github:org/repo".
@@ -197,7 +200,11 @@ func isNotFound(err error) bool {
 }
 
 func (c *GitHubClient) apiRequest(ctx context.Context, path string) ([]byte, error) {
-	url := fmt.Sprintf("https://api.github.com/repos/%s/%s/%s", c.Owner, c.Repo, path)
+	base := c.apiBase
+	if base == "" {
+		base = "https://api.github.com"
+	}
+	url := fmt.Sprintf("%s/repos/%s/%s/%s", base, c.Owner, c.Repo, path)
 
 	token, err := c.Auth.Token(ctx)
 	if err != nil {
@@ -386,79 +393,198 @@ func (c *GitHubClient) fetchSynthesizedIndex(ctx context.Context) (*RegistryInde
 	return idx, nil
 }
 
-// scanSynthesizedType lists <type>s/ at the repo root and reads each child's
-// content frontmatter (uppercase preferred, lowercase fallback) to populate
-// the description.
+// scanSynthesizedType lists <type>s/ at the repo root and discovers items.
+// Two layouts are supported:
+//
+//   - Flat:    <type>s/<item>/<TYPE>.md (or <type>.md). Item name = "<item>".
+//   - Nested:  <type>s/<category>/<item>/<TYPE>.md. Item name = "<category>/<item>".
+//
+// Detection is per-child: if a top-level child of <type>s/ has a content
+// file, it is treated as a flat item. If it has no content file, the child
+// is treated as a namespace and its grandchildren are probed for the same
+// content files. Recursion stops at one level — anything deeper requires
+// the registry to ship amaru_registry.json with explicit entries.
+//
+// This makes Google-style registries (skills/cloud/<skill>/SKILL.md)
+// installable without per-registry configuration while preserving the
+// fetch budget for flat repos (one probe per item, same as before).
 func (c *GitHubClient) scanSynthesizedType(ctx context.Context, t types.ItemType) (map[string]RegistryEntry, error) {
 	body, err := c.apiRequest(ctx, "contents/"+t.DirName())
 	if err != nil {
 		return nil, err
 	}
 
-	var entries []struct {
-		Name string `json:"name"`
-		Type string `json:"type"`
-	}
+	var entries []dirEntry
 	if err := json.Unmarshal(body, &entries); err != nil {
 		return nil, fmt.Errorf("parsing %s directory: %w", t.DirName(), err)
 	}
 
-	var dirs []string
+	var topDirs []string
 	for _, e := range entries {
 		if e.Type == "dir" {
-			dirs = append(dirs, e.Name)
+			topDirs = append(topDirs, e.Name)
 		}
 	}
-	if len(dirs) == 0 {
+	if len(topDirs) == 0 {
 		return map[string]RegistryEntry{}, nil
 	}
 
-	descriptions := make([]string, len(dirs))
-	errs := make([]error, len(dirs))
+	// Probe each top-level child in parallel. A successful description fetch
+	// means the child is a flat item; a missing content file means it's a
+	// namespace and we need to recurse into it.
+	type probeResult struct {
+		flatHit     bool
+		flatDesc    string
+		namespace   string // non-empty when the child is a namespace dir
+		err         error
+	}
+	probes := make([]probeResult, len(topDirs))
 
 	sem := make(chan struct{}, maxConcurrent)
 	var wg sync.WaitGroup
-	for i, name := range dirs {
+	for i, name := range topDirs {
 		wg.Add(1)
 		go func(idx int, itemName string) {
 			defer wg.Done()
 			select {
 			case sem <- struct{}{}:
 			case <-ctx.Done():
-				errs[idx] = ctx.Err()
+				probes[idx].err = ctx.Err()
 				return
 			}
 			defer func() { <-sem }()
-			descriptions[idx] = c.fetchSynthesizedDescription(ctx, t, itemName)
+
+			desc, found := c.tryFetchSynthesizedDescription(ctx, t, itemName)
+			if found {
+				probes[idx].flatHit = true
+				probes[idx].flatDesc = desc
+				return
+			}
+			probes[idx].namespace = itemName
 		}(i, name)
 	}
 	wg.Wait()
-	for _, e := range errs {
-		if e != nil {
-			return nil, e
+
+	out := map[string]RegistryEntry{}
+	var namespaces []string
+	for i, p := range probes {
+		if p.err != nil {
+			return nil, p.err
+		}
+		if p.flatHit {
+			out[topDirs[i]] = RegistryEntry{Description: p.flatDesc}
+			continue
+		}
+		if p.namespace != "" {
+			namespaces = append(namespaces, p.namespace)
 		}
 	}
 
-	out := make(map[string]RegistryEntry, len(dirs))
-	for i, d := range dirs {
-		out[d] = RegistryEntry{Description: descriptions[i]}
+	// Recurse one level into each namespace and probe each grandchild.
+	for _, ns := range namespaces {
+		nsItems, err := c.scanSynthesizedNamespace(ctx, t, ns)
+		if err != nil {
+			return nil, err
+		}
+		for name, entry := range nsItems {
+			out[name] = entry
+		}
+	}
+
+	return out, nil
+}
+
+// scanSynthesizedNamespace lists <type>s/<ns>/ and probes each grandchild dir
+// for a content file. Hits become items named "<ns>/<grandchild>". Misses are
+// silently skipped (depth >1 is out of scope for synthesized discovery).
+func (c *GitHubClient) scanSynthesizedNamespace(ctx context.Context, t types.ItemType, ns string) (map[string]RegistryEntry, error) {
+	body, err := c.apiRequest(ctx, "contents/"+t.DirName()+"/"+ns)
+	if err != nil {
+		// Treat missing namespace as empty rather than an error — the parent
+		// scan already saw the dir, so a 404 here is a transient race or a
+		// permission issue, not a hard failure.
+		if isNotFound(err) {
+			return map[string]RegistryEntry{}, nil
+		}
+		return nil, err
+	}
+
+	var entries []dirEntry
+	if err := json.Unmarshal(body, &entries); err != nil {
+		return nil, fmt.Errorf("parsing %s/%s directory: %w", t.DirName(), ns, err)
+	}
+
+	var grandchildren []string
+	for _, e := range entries {
+		if e.Type == "dir" {
+			grandchildren = append(grandchildren, e.Name)
+		}
+	}
+	if len(grandchildren) == 0 {
+		return map[string]RegistryEntry{}, nil
+	}
+
+	type probeResult struct {
+		hit  bool
+		desc string
+		err  error
+	}
+	probes := make([]probeResult, len(grandchildren))
+
+	sem := make(chan struct{}, maxConcurrent)
+	var wg sync.WaitGroup
+	for i, gc := range grandchildren {
+		wg.Add(1)
+		go func(idx int, child string) {
+			defer wg.Done()
+			select {
+			case sem <- struct{}{}:
+			case <-ctx.Done():
+				probes[idx].err = ctx.Err()
+				return
+			}
+			defer func() { <-sem }()
+			desc, found := c.tryFetchSynthesizedDescription(ctx, t, ns+"/"+child)
+			probes[idx].hit = found
+			probes[idx].desc = desc
+		}(i, gc)
+	}
+	wg.Wait()
+
+	out := map[string]RegistryEntry{}
+	for i, p := range probes {
+		if p.err != nil {
+			return nil, p.err
+		}
+		if !p.hit {
+			continue
+		}
+		name := ns + "/" + grandchildren[i]
+		out[name] = RegistryEntry{Description: p.desc}
 	}
 	return out, nil
 }
 
-// fetchSynthesizedDescription reads the per-item content file's frontmatter.
-// Tries <TYPE>.md first (Anthropic convention), then <type>.md (amaru-native).
-// Missing → empty description (no error).
-func (c *GitHubClient) fetchSynthesizedDescription(ctx context.Context, t types.ItemType, name string) string {
+// tryFetchSynthesizedDescription returns (description, true) if a candidate
+// content file (<TYPE>.md or <type>.md) exists under <type>s/<name>/.
+// Returns ("", false) if no candidate file exists. Item names may contain
+// a single forward slash to address subpath skills (e.g. "cloud/bigquery").
+func (c *GitHubClient) tryFetchSynthesizedDescription(ctx context.Context, t types.ItemType, name string) (string, bool) {
 	for _, fname := range synthesizedContentCandidates(t) {
 		path := t.DirName() + "/" + name + "/" + fname
 		data, err := c.getFileContent(ctx, path, "")
 		if err != nil {
 			continue
 		}
-		return parseSkillFrontmatter(data).Description
+		return parseSkillFrontmatter(data).Description, true
 	}
-	return ""
+	return "", false
+}
+
+// dirEntry is the minimal shape of a GitHub Contents API directory listing entry.
+type dirEntry struct {
+	Name string `json:"name"`
+	Type string `json:"type"`
 }
 
 // synthesizedContentCandidates returns the per-type filenames probed for

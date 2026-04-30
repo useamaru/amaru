@@ -430,12 +430,24 @@ Skillsets are defined in `amaru_registry.json`:
       "items": [
         { "type": "skill", "name": "research" },
         { "type": "skill", "name": "plan" },
-        { "type": "command", "name": "dev/bootstrap" }
+        { "type": "command", "name": "dev/bootstrap" },
+        // Cross-registry member — sourced from registry alias "platform",
+        // which the consumer must have configured in their amaru.json.
+        { "type": "command", "name": "deploy", "registry": "platform" }
       ]
     }
   }
 }
 ```
+
+**Cross-registry skillsets** let one registry's skillset pull members from other registries the consumer has configured. The optional `registry` field on a member overrides the skillset's home registry; omit it to source from the home registry (the default). When authoring with `amaru repo add ... --type skillset`, use the `type/name@<alias>` syntax: `--items "skill/research,command/deploy@platform"`.
+
+**Foreign-registry layouts** (no `amaru_registry.json`) work in two shapes:
+
+- *Flat:* `skills/<name>/SKILL.md` — every direct child of `skills/` is a skill (e.g. `vercel-labs/agent-skills`).
+- *Nested:* `skills/<category>/<name>/SKILL.md` — items live one level deeper, addressed by `<category>/<name>` (e.g. `google/skills` with `skills/cloud/bigquery`, `skills/data/schema-design`).
+
+Detection is automatic: if a top-level child of `skills/` has a `SKILL.md`/`skill.md`, it is treated as a flat skill; otherwise it is treated as a category and its grandchildren are probed. The same rule applies to `commands/` and `agents/`. Recursion stops at one level — anything deeper requires the registry to ship `amaru_registry.json` with explicit entries.
 
 amaru accesses registries through the GitHub API for installable items. For context sync, it uses sparse checkout via Sapling (preferred) or Git.
 
