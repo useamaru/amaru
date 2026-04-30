@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/barelias/amaru/internal/manifest"
+	"github.com/useamaru/amaru/internal/manifest"
 )
 
 func TestResolveConfig(t *testing.T) {
@@ -108,14 +108,18 @@ func TestRepoURL(t *testing.T) {
 func TestSparsePaths(t *testing.T) {
 	cfg := &Config{Project: "myapp"}
 	paths := cfg.SparsePaths()
-	if len(paths) != 2 {
-		t.Fatalf("expected 2 paths, got %d", len(paths))
+	want := []string{
+		".amaru_registry/context/myapp", // legacy (v1) — kept for back-compat
+		"context/myapp",                 // flat (v2)
+		"AGENTS.md",
 	}
-	if paths[0] != ".amaru_registry/context/myapp" {
-		t.Errorf("expected .amaru_registry/context/myapp, got %s", paths[0])
+	if len(paths) != len(want) {
+		t.Fatalf("expected %d paths, got %d (%v)", len(want), len(paths), paths)
 	}
-	if paths[1] != "AGENTS.md" {
-		t.Errorf("expected AGENTS.md, got %s", paths[1])
+	for i, w := range want {
+		if paths[i] != w {
+			t.Errorf("paths[%d] = %q, want %q", i, paths[i], w)
+		}
 	}
 }
 

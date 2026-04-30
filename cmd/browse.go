@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/barelias/amaru/internal/types"
-	"github.com/barelias/amaru/internal/ui"
+	"github.com/useamaru/amaru/internal/types"
+	"github.com/useamaru/amaru/internal/ui"
 
 	"github.com/spf13/cobra"
 )
@@ -68,7 +68,11 @@ func runBrowse(ctx context.Context) error {
 					if len(entry.Tags) > 0 {
 						tags = "[" + strings.Join(entry.Tags, ", ") + "]"
 					}
-					rows = append(rows, []string{"    " + name, entry.Latest, tags, entry.Description})
+					desc := entry.Description
+					if entry.Source != "" {
+						desc = fmt.Sprintf("%s  (← mirror:%s)", desc, entry.Source)
+					}
+					rows = append(rows, []string{"    " + name, entry.Latest, tags, desc})
 				}
 				ui.Table(rows)
 			}
@@ -84,7 +88,11 @@ func runBrowse(ctx context.Context) error {
 					tags = "[" + strings.Join(ss.Tags, ", ") + "]"
 				}
 				count := fmt.Sprintf("%d items", len(ss.Items))
-				rows = append(rows, []string{"    " + name, count, tags, ss.Description})
+				desc := ss.Description
+				if ss.Source != "" {
+					desc = fmt.Sprintf("%s  (← mirror:%s)", desc, ss.Source)
+				}
+				rows = append(rows, []string{"    " + name, count, tags, desc})
 			}
 			ui.Table(rows)
 		}

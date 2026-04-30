@@ -6,10 +6,10 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/barelias/amaru/internal/registry"
-	"github.com/barelias/amaru/internal/scaffold"
-	"github.com/barelias/amaru/internal/types"
-	"github.com/barelias/amaru/internal/ui"
+	"github.com/useamaru/amaru/internal/registry"
+	"github.com/useamaru/amaru/internal/scaffold"
+	"github.com/useamaru/amaru/internal/types"
+	"github.com/useamaru/amaru/internal/ui"
 
 	"github.com/spf13/cobra"
 )
@@ -44,15 +44,20 @@ func runRepoValidate() error {
 		return err
 	}
 
-	fmt.Printf("Validating registry at %s...\n\n", dir)
+	layout, err := registry.LayoutFor(idx)
+	if err != nil {
+		return err
+	}
+
+	fmt.Printf("Validating registry at %s (%s layout)...\n\n", dir, layout)
 
 	result := &validateResult{}
 
 	// Validate items for each type
 	for _, itemType := range types.AllInstallableTypes() {
 		entries := idx.EntriesForType(itemType)
-		validateEntries(dir, itemType, entries, result)
-		checkOrphans(dir, itemType, entries, result)
+		validateEntries(dir, layout, itemType, entries, result)
+		checkOrphans(dir, layout, itemType, entries, result)
 	}
 
 	// Validate skillsets
@@ -87,9 +92,9 @@ func runRepoValidate() error {
 	return nil
 }
 
-func validateEntries(dir string, itemType types.ItemType, entries map[string]registry.RegistryEntry, result *validateResult) {
+func validateEntries(dir string, layout registry.Layout, itemType types.ItemType, entries map[string]registry.RegistryEntry, result *validateResult) {
 	for name, entry := range entries {
-		itemDir := filepath.Join(dir, ".amaru_registry", itemType.DirName(), name)
+		itemDir := layout.ItemDir(dir, itemType, name)
 
 		// Check name validity
 		if err := types.ValidateItemName(name); err != nil {
@@ -168,8 +173,8 @@ func validateEntries(dir string, itemType types.ItemType, entries map[string]reg
 	}
 }
 
-func checkOrphans(dir string, itemType types.ItemType, entries map[string]registry.RegistryEntry, result *validateResult) {
-	typeDir := filepath.Join(dir, ".amaru_registry", itemType.DirName())
+func checkOrphans(dir string, layout registry.Layout, itemType types.ItemType, entries map[string]registry.RegistryEntry, result *validateResult) {
+	typeDir := layout.TypeDir(dir, itemType)
 	dirEntries, err := os.ReadDir(typeDir)
 	if err != nil {
 		return

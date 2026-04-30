@@ -6,7 +6,7 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/barelias/amaru/internal/types"
+	"github.com/useamaru/amaru/internal/types"
 )
 
 const ManifestFile = "amaru.json"

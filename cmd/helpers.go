@@ -4,9 +4,9 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/barelias/amaru/internal/manifest"
-	"github.com/barelias/amaru/internal/registry"
-	"github.com/barelias/amaru/internal/ui"
+	"github.com/useamaru/amaru/internal/manifest"
+	"github.com/useamaru/amaru/internal/registry"
+	"github.com/useamaru/amaru/internal/ui"
 )
 
 // loadManifest loads the manifest from the current directory.

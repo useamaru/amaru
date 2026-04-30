@@ -3,8 +3,8 @@ package scaffold
 import (
 	"fmt"
 
-	"github.com/barelias/amaru/internal/registry"
-	"github.com/barelias/amaru/internal/types"
+	"github.com/useamaru/amaru/internal/registry"
+	"github.com/useamaru/amaru/internal/types"
 )
 
 // ItemManifestFor creates a manifest.json struct for the given item type.

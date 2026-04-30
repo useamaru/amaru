@@ -15,24 +15,24 @@ amaru connects your projects to centralized registries hosted on GitHub — mana
 ```bash
 OS=$(uname -s | tr '[:upper:]' '[:lower:]')
 ARCH=$(uname -m | sed 's/x86_64/amd64/' | sed 's/aarch64/arm64/')
-curl -fsSL "https://github.com/barelias/amaru/releases/latest/download/amaru_${OS}_${ARCH}.tar.gz" | tar xz
+curl -fsSL "https://github.com/useamaru/amaru/releases/latest/download/amaru_${OS}_${ARCH}.tar.gz" | tar xz
 sudo mv amaru /usr/local/bin/
 ```
 
 **From GitHub Releases** (all platforms including Windows):
 
-Download the binary for your platform from [github.com/barelias/amaru/releases](https://github.com/barelias/amaru/releases).
+Download the binary for your platform from [github.com/useamaru/amaru/releases](https://github.com/useamaru/amaru/releases).
 
 **With Go:**
 
 ```bash
-go install github.com/barelias/amaru@latest
+go install github.com/useamaru/amaru@latest
 ```
 
 **From source:**
 
 ```bash
-git clone https://github.com/barelias/amaru.git
+git clone https://github.com/useamaru/amaru.git
 cd amaru
 go build -o amaru .
 ```
@@ -382,41 +382,40 @@ export AMARU_TOKEN_PLATFORM="ghp_xxxxxxxxxxxx"
 
 ## Registry Structure
 
-A registry is just a GitHub repo with this layout:
+A registry is just a GitHub repo with this layout (v2 — flat):
 
 ```
 my-skills-registry/
-├── amaru_registry.json            # Package index (auto-updated by CI)
-├── AGENTS.md                      # Root navigation + registry structure
-└── .amaru_registry/               # All registry content
-    ├── .sparse-profiles/          # Sapling sparse checkout profiles
-    │   └── my-app
-    ├── skills/
-    │   ├── research/
-    │   │   ├── skill.md           # The skill content
-    │   │   ├── manifest.json      # Metadata + version
-    │   │   └── examples/          # Optional
-    │   └── plan/
-    │       ├── skill.md
-    │       └── manifest.json
-    ├── commands/
-    │   └── dev/
-    │       └── bootstrap/
-    │           ├── command.md
-    │           └── manifest.json
-    ├── agents/
-    │   └── code-reviewer/
-    │       ├── agent.md
-    │       └── manifest.json
-    └── context/
-        └── my-app/
-            ├── AGENTS.md          # Per-project navigation
-            ├── brainstorms/
-            ├── plans/
-            └── solutions/
+├── amaru_registry.json    # Package index (auto-updated by CI; amaru_version: "2")
+├── AGENTS.md              # Root navigation + registry structure
+├── .sparse-profiles/      # Sapling sparse checkout profiles
+│   └── my-app
+├── skills/
+│   ├── research/
+│   │   ├── skill.md       # The skill content
+│   │   ├── manifest.json  # Metadata + version
+│   │   └── examples/      # Optional
+│   └── plan/
+│       ├── skill.md
+│       └── manifest.json
+├── commands/
+│   └── dev/
+│       └── bootstrap/
+│           ├── command.md
+│           └── manifest.json
+├── agents/
+│   └── code-reviewer/
+│       ├── agent.md
+│       └── manifest.json
+└── context/
+    └── my-app/
+        ├── AGENTS.md      # Per-project navigation
+        ├── brainstorms/
+        ├── plans/
+        └── solutions/
 ```
 
-The `.amaru_registry/` prefix keeps registry content separate from the repo's own source code, making it easy for any tool to double as its own registry.
+This shape matches other Claude Code skill registries (e.g. `vercel-labs/agent-skills`, `jeremylongshore/claude-code-plugins-plus-skills`), so any such repo is droppable as an amaru registry without restructuring. amaru still reads the legacy `.amaru_registry/`-prefixed (v1) layout for backward compatibility — run `amaru repo migrate` to upgrade an old registry to v2 (see Commands).
 
 Versions are tracked via git tags: `skill/research/1.0.3`, `command/dev/bootstrap/2.0.0`, `agent/code-reviewer/1.0.0`.
 
@@ -483,8 +482,8 @@ Create a new item in the registry with template files and update the index.
 ```bash
 $ amaru repo add research
   ✓ Created skill "research"
-  Directory: .amaru_registry/skills/research/
-  Content:   .amaru_registry/skills/research/skill.md
+  Directory: skills/research/
+  Content:   skills/research/skill.md
 
 $ amaru repo add deploy --type command -d "Deploy to production"
   ✓ Created command "deploy"
@@ -545,6 +544,64 @@ $ amaru repo tag research 1.0.0
   To push: git push --follow-tags
 ```
 
+Pass `--cascade` to also patch-bump every skillset whose `Items` include the tagged item:
+
+```bash
+$ amaru repo tag research 1.1.0 --cascade
+  ✓ Tagged skill "research" as v1.1.0
+  Tag: skill/research/1.1.0
+  ✓ Cascaded patch bumps into 2 skillset(s): starter-pack, power-pack
+```
+
+The cascade only updates the skillset's `Latest` in the index — it does not create per-skillset git tags. A skillset whose `Latest` was unset starts at `0.1.0` on the first cascade. The cascade aborts cleanly (with no partial writes) if any affected skillset's `Latest` is non-empty but not valid semver.
+
+### `amaru repo migrate [<url>]`
+
+Convert a registry from the legacy nested layout (`.amaru_registry/{skills,...}`) to the v2 flat layout (`skills/`, `commands/`, `agents/`, `context/`, `.sparse-profiles/` at the root).
+
+**In-place** (no argument) — migrates the registry in the current directory. Idempotent: a v2 registry is a no-op. A `.migrating` journal at the registry root protects against half-migrated state if the run crashes; sparse profiles are rewritten with an anchored-prefix algorithm and originals preserved as `.bak`.
+
+```bash
+$ amaru repo migrate --dry-run
+Dry run — the following moves would be performed:
+  .amaru_registry/skills -> skills
+  .amaru_registry/commands -> commands
+  .amaru_registry/agents -> agents
+  .amaru_registry/context -> context
+  .amaru_registry/.sparse-profiles -> .sparse-profiles
+…
+
+$ amaru repo migrate
+  ✓ Migrated to v2 flat layout (5 move(s)).
+  ✓ Rewrote 1 sparse profile(s); originals preserved as .bak files.
+
+  Next steps:
+    1. Review the diff: git status && git diff
+    2. Stage and commit: git add -A && git commit -m "chore: migrate registry to flat layout"
+    3. Push: git push
+```
+
+Flags:
+- `--dry-run` — print planned moves without changing anything.
+- `--allow-dirty` — proceed even if `git status` is non-empty (default: refuse).
+- `--skip-sparse-rewrite` — leave `.sparse-profiles/*` files untouched (for hand-customized profiles).
+- `--strict-children` — refuse to migrate if `.amaru_registry/` contains non-canonical children (e.g. `.DS_Store`); without the flag, those children move verbatim.
+
+**Remote** (`amaru repo migrate <url>`) — clones the registry to a temp directory, runs the in-place migration, commits with a fixed message, and pushes. By default the migration commit lands on a `migration/flat-layout` side branch and the command prints a `gh pr create` next-step. Pre-push the command verifies the cloned HEAD is still the remote tip; if the remote moved during migration, it refuses. Each git invocation is bounded by a 60-second timeout to prevent credential prompts from hanging the process.
+
+```bash
+$ amaru repo migrate github:acme-org/acme-skills
+  ✓ Migrated github:acme-org/acme-skills and pushed branch "migration/flat-layout" (commit 3f9a2c1d).
+
+  Next step — open a PR:
+    gh pr create --repo acme-org/acme-skills --head migration/flat-layout --title "Migrate registry to flat layout"
+```
+
+Additional remote-mode flags:
+- `--push-to-default` — push the migration commit directly onto the default branch instead of a side branch (skips the PR step).
+- `--branch <name>` — override the side branch name.
+- `--protocol ssh|https` — clone protocol (default ssh).
+
 ### `amaru repo info <name> [--type skill|command|agent]`
 
 Show detailed information about a specific item in the registry.
@@ -562,11 +619,11 @@ Files:       skill.md
 
 ## Self-Hosted Registry
 
-This repo is its own registry — it ships an `amaru-usage` skill that teaches Claude Code how to use amaru. Any tool can do the same: add `amaru_registry.json` and `.amaru_registry/` to your repo.
+This repo is its own registry — it ships an `amaru-usage` skill that teaches Claude Code how to use amaru. Any tool can do the same: add `amaru_registry.json` and a top-level `skills/` (or `commands/`, `agents/`) directory to your repo.
 
 ```bash
 # In any project:
-amaru init                    # Use github:barelias/amaru as the registry URL
+amaru init                    # Use github:useamaru/amaru as the registry URL
 amaru add amaru-usage         # Install the amaru-usage skill
 ```
 

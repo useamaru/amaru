@@ -3,7 +3,7 @@ package main
 import (
 	"os"
 
-	"github.com/barelias/amaru/cmd"
+	"github.com/useamaru/amaru/cmd"
 )
 
 func main() {

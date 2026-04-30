@@ -7,7 +7,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/barelias/amaru/internal/types"
+	"github.com/useamaru/amaru/internal/types"
 )
 
 func TestDependencySpecUnmarshalShorthand(t *testing.T) {

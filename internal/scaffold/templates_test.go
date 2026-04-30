@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/barelias/amaru/internal/types"
+	"github.com/useamaru/amaru/internal/types"
 )
 
 func TestItemManifestFor(t *testing.T) {

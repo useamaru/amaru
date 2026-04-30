@@ -7,10 +7,10 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/barelias/amaru/internal/registry"
-	"github.com/barelias/amaru/internal/scaffold"
-	"github.com/barelias/amaru/internal/types"
-	"github.com/barelias/amaru/internal/ui"
+	"github.com/useamaru/amaru/internal/registry"
+	"github.com/useamaru/amaru/internal/scaffold"
+	"github.com/useamaru/amaru/internal/types"
+	"github.com/useamaru/amaru/internal/ui"
 
 	"github.com/spf13/cobra"
 )
@@ -66,8 +66,12 @@ func runRepoInfo(name string) error {
 	fmt.Printf("Version:     %s\n", version)
 	fmt.Printf("Description: %s\n", entry.Description)
 
-	// Read manifest for more details
-	itemDir := filepath.Join(dir, ".amaru_registry", itemType.DirName(), name)
+	// Read manifest for more details — path resolved via the index's declared layout.
+	layout, err := registry.LayoutFor(idx)
+	if err != nil {
+		return err
+	}
+	itemDir := layout.ItemDir(dir, itemType, name)
 	manifestPath := filepath.Join(itemDir, "manifest.json")
 	if data, err := os.ReadFile(manifestPath); err == nil {
 		var m registry.ItemManifest
@@ -97,8 +101,9 @@ func runRepoInfo(name string) error {
 		fmt.Printf("Skillsets:   %s\n", strings.Join(memberOf, ", "))
 	}
 
-	fmt.Printf("\nmanifest.json: .amaru_registry/%s/%s/manifest.json\n", itemType.DirName(), name)
-	fmt.Printf("Content:       .amaru_registry/%s/%s/%s.md\n", itemType.DirName(), name, itemType.Singular())
+	relItem := layout.RelativeItemPath(itemType, name)
+	fmt.Printf("\nmanifest.json: %s/manifest.json\n", relItem)
+	fmt.Printf("Content:       %s/%s.md\n", relItem, itemType.Singular())
 
 	return nil
 }

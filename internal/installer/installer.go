@@ -8,7 +8,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/barelias/amaru/internal/registry"
+	"github.com/useamaru/amaru/internal/registry"
 )
 
 const (

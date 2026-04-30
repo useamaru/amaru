@@ -5,7 +5,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/barelias/amaru/internal/registry"
+	"github.com/useamaru/amaru/internal/registry"
 )
 
 func TestLoadLocalIndex(t *testing.T) {

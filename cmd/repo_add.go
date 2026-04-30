@@ -8,10 +8,10 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/barelias/amaru/internal/registry"
-	"github.com/barelias/amaru/internal/scaffold"
-	"github.com/barelias/amaru/internal/types"
-	"github.com/barelias/amaru/internal/ui"
+	"github.com/useamaru/amaru/internal/registry"
+	"github.com/useamaru/amaru/internal/scaffold"
+	"github.com/useamaru/amaru/internal/types"
+	"github.com/useamaru/amaru/internal/ui"
 
 	"github.com/spf13/cobra"
 )
@@ -95,8 +95,12 @@ func runRepoAdd(name string) error {
 		}
 	}
 
-	// Create directory
-	itemDir := filepath.Join(dir, ".amaru_registry", itemType.DirName(), name)
+	// Create directory using the index's declared layout.
+	layout, err := registry.LayoutFor(idx)
+	if err != nil {
+		return err
+	}
+	itemDir := layout.ItemDir(dir, itemType, name)
 	if err := os.MkdirAll(itemDir, 0755); err != nil {
 		return fmt.Errorf("creating directory: %w", err)
 	}
@@ -134,10 +138,11 @@ func runRepoAdd(name string) error {
 	}
 
 	ui.Check("Created %s %q", itemType.Singular(), name)
-	fmt.Printf("  Directory: .amaru_registry/%s/%s/\n", itemType.DirName(), name)
-	fmt.Printf("  Content:   .amaru_registry/%s/%s/%s.md\n", itemType.DirName(), name, itemType.Singular())
+	relItem := layout.RelativeItemPath(itemType, name)
+	fmt.Printf("  Directory: %s/\n", relItem)
+	fmt.Printf("  Content:   %s/%s.md\n", relItem, itemType.Singular())
 	fmt.Printf("\n  Next steps:\n")
-	fmt.Printf("    1. Edit .amaru_registry/%s/%s/%s.md\n", itemType.DirName(), name, itemType.Singular())
+	fmt.Printf("    1. Edit %s/%s.md\n", relItem, itemType.Singular())
 	fmt.Printf("    2. amaru repo tag %s 1.0.0 --type %s\n", name, itemType.Singular())
 
 	return nil

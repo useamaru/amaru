@@ -6,8 +6,8 @@ import (
 	"os"
 	"strings"
 
-	"github.com/barelias/amaru/internal/manifest"
-	"github.com/barelias/amaru/internal/registry"
+	"github.com/useamaru/amaru/internal/manifest"
+	"github.com/useamaru/amaru/internal/registry"
 
 	"github.com/spf13/cobra"
 )

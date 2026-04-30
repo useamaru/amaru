@@ -4,9 +4,9 @@ import (
 	"encoding/json"
 	"fmt"
 
-	"github.com/barelias/amaru/internal/scaffold"
-	"github.com/barelias/amaru/internal/types"
-	"github.com/barelias/amaru/internal/ui"
+	"github.com/useamaru/amaru/internal/scaffold"
+	"github.com/useamaru/amaru/internal/types"
+	"github.com/useamaru/amaru/internal/ui"
 
 	"github.com/spf13/cobra"
 )

@@ -5,12 +5,12 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/barelias/amaru/internal/installer"
-	"github.com/barelias/amaru/internal/manifest"
-	"github.com/barelias/amaru/internal/registry"
-	"github.com/barelias/amaru/internal/resolver"
-	"github.com/barelias/amaru/internal/types"
-	"github.com/barelias/amaru/internal/ui"
+	"github.com/useamaru/amaru/internal/installer"
+	"github.com/useamaru/amaru/internal/manifest"
+	"github.com/useamaru/amaru/internal/registry"
+	"github.com/useamaru/amaru/internal/resolver"
+	"github.com/useamaru/amaru/internal/types"
+	"github.com/useamaru/amaru/internal/ui"
 
 	"github.com/Masterminds/semver/v3"
 	"github.com/spf13/cobra"

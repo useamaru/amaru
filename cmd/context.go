@@ -4,10 +4,10 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/barelias/amaru/internal/ctxdocs"
-	"github.com/barelias/amaru/internal/hooks"
-	"github.com/barelias/amaru/internal/ui"
-	"github.com/barelias/amaru/internal/vcs"
+	"github.com/useamaru/amaru/internal/ctxdocs"
+	"github.com/useamaru/amaru/internal/hooks"
+	"github.com/useamaru/amaru/internal/ui"
+	"github.com/useamaru/amaru/internal/vcs"
 
 	"github.com/spf13/cobra"
 )

@@ -7,8 +7,8 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/barelias/amaru/internal/manifest"
-	"github.com/barelias/amaru/internal/vcs"
+	"github.com/useamaru/amaru/internal/manifest"
+	"github.com/useamaru/amaru/internal/vcs"
 )
 
 const (
@@ -59,11 +59,27 @@ func (c *Config) RepoURL() (string, error) {
 }
 
 // SparsePaths returns the paths to include in the sparse checkout for git.
+// Includes both the legacy nested path and the flat v2 path so the same
+// sparse checkout works against either layout — git silently skips paths
+// that don't exist in the cloned repo.
 func (c *Config) SparsePaths() []string {
 	return []string{
 		".amaru_registry/context/" + c.Project,
+		"context/" + c.Project,
 		"AGENTS.md",
 	}
+}
+
+// resolveContextSrc returns whichever of the two candidate context source
+// paths actually exists in the sparse checkout. Falls back to the legacy
+// path so callers always get a non-empty result (even if the path doesn't
+// exist yet — surfaces a clearer error downstream).
+func resolveContextSrc(cloneTarget, project string) string {
+	flat := filepath.Join(cloneTarget, "context", project)
+	if _, err := os.Stat(flat); err == nil {
+		return flat
+	}
+	return filepath.Join(cloneTarget, ".amaru_registry", "context", project)
 }
 
 // Init sets up context sync for the current project.
@@ -90,8 +106,9 @@ func Init(ctx context.Context, projectDir string, cfg *Config, backend vcs.Backe
 		return fmt.Errorf("sparse clone failed: %w", err)
 	}
 
-	// Create symlink from local path to the context project dir in the clone
-	contextSrc := filepath.Join(cloneTarget, ".amaru_registry", "context", cfg.Project)
+	// Create symlink from local path to the context project dir in the clone.
+	// Layout-aware: prefers the flat v2 path, falls back to legacy nested.
+	contextSrc := resolveContextSrc(cloneTarget, cfg.Project)
 	contextDst := filepath.Join(projectDir, cfg.LocalPath)
 
 	if err := os.MkdirAll(filepath.Dir(contextDst), 0755); err != nil {
@@ -134,7 +151,11 @@ func Push(ctx context.Context, projectDir string, cfg *Config, backend vcs.Backe
 		return nil // Nothing to push
 	}
 
-	contextPath := filepath.Join(".amaru_registry", "context", cfg.Project)
+	// Stage whichever layout's context path actually exists in the clone.
+	contextPath := "context/" + cfg.Project
+	if _, err := os.Stat(filepath.Join(cloneDir, contextPath)); err != nil {
+		contextPath = ".amaru_registry/context/" + cfg.Project
+	}
 	if err := backend.Add(ctx, cloneDir, []string{contextPath}); err != nil {
 		return fmt.Errorf("staging changes: %w", err)
 	}

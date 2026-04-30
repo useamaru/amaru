@@ -13,7 +13,7 @@ import (
 	"time"
 
 	"github.com/Masterminds/semver/v3"
-	"github.com/barelias/amaru/internal/types"
+	"github.com/useamaru/amaru/internal/types"
 )
 
 const (
@@ -26,12 +26,18 @@ const (
 // Used for resolving mirror registries.
 type ClientFactory func(url string) (Client, error)
 
-type repoFormat int
+// indexSource encodes how a registry's index was obtained.
+// It is the orthogonal partner of Layout (path math) — a registry can be
+// (LayoutFlat, sourceIndexed) [amaru-native v2], (LayoutFlat, sourceSynthesized)
+// [foreign Vercel-shaped repos], or (LayoutNested, sourceIndexed) [legacy amaru].
+// (LayoutNested, sourceSynthesized) is not a real combination — synthesized
+// always implies flat, since the synthesizer reads top-level <type>s/ dirs.
+type indexSource int
 
 const (
-	formatUnknown repoFormat = iota
-	formatAmaru              // amaru_registry.json at root
-	formatVercel             // skills/*/SKILL.md layout
+	sourceUnknown     indexSource = iota
+	sourceIndexed                 // amaru_registry.json was parsed
+	sourceSynthesized             // index built from a top-level skills/ walk
 )
 
 // rateLimiter tracks a global backoff state shared across all concurrent requests
@@ -68,13 +74,19 @@ func (r *rateLimiter) backoff(d time.Duration) {
 }
 
 // GitHubClient implements Client using the GitHub API.
+//
+// After FetchIndex completes, layout and source describe the (layout, source)
+// pair detected for this registry. layout drives path resolution for downloads;
+// source distinguishes amaru-native registries (which carry manifests, skillsets,
+// per-item version tags) from foreign synthesized registries (which don't).
 type GitHubClient struct {
 	Owner         string
 	Repo          string
 	Auth          Authenticator
 	rl            *rateLimiter
 	mirrorFactory ClientFactory
-	format        repoFormat // detected by FetchIndex
+	layout        Layout
+	source        indexSource
 }
 
 // NewGitHubClient creates a new GitHub registry client from a URL like "github:org/repo".
@@ -88,7 +100,7 @@ func NewGitHubClient(url string, auth Authenticator) (*GitHubClient, error) {
 		Repo:   repo,
 		Auth:   auth,
 		rl:     &rateLimiter{},
-		format: formatUnknown,
+		source: sourceUnknown,
 	}, nil
 }
 
@@ -258,27 +270,39 @@ func (c *GitHubClient) apiRequest(ctx context.Context, path string) ([]byte, err
 	return nil, lastErr
 }
 
-// FetchIndex auto-detects the registry format and returns the index.
-// Tries amaru format (amaru_registry.json) first, then Vercel format (skills/*/SKILL.md).
-// If the index has mirrors, fetches and merges them (primary registry wins on conflict).
+// FetchIndex auto-detects the registry's (layout, source) pair and returns the index.
+// Tries amaru_registry.json first (sourceIndexed); on 404 falls back to a top-level
+// skills/ walk (sourceSynthesized, always flat). If the index declares mirrors,
+// fetches and merges them (primary registry wins on conflict).
 func (c *GitHubClient) FetchIndex(ctx context.Context) (*RegistryIndex, error) {
 	var index *RegistryIndex
 
 	data, err := c.getFileContent(ctx, "amaru_registry.json", "")
 	if err == nil {
-		c.format = formatAmaru
 		var idx RegistryIndex
 		if err := json.Unmarshal(data, &idx); err != nil {
 			return nil, fmt.Errorf("parsing registry index: %w", err)
 		}
 		initIndex(&idx)
+		layout, layoutErr := LayoutFor(&idx)
+		if layoutErr != nil {
+			return nil, fmt.Errorf("registry has unsupported layout: %w", layoutErr)
+		}
+		c.layout = layout
+		c.source = sourceIndexed
+		if layout.IsLegacy() {
+			emitLegacyLayoutWarning(c.Owner, c.Repo)
+		}
 		index = &idx
 	} else if isNotFound(err) {
-		idx, vercelErr := c.fetchVercelIndex(ctx)
-		if vercelErr != nil {
-			return nil, fmt.Errorf("registry has neither amaru_registry.json nor skills/ directory: %w", vercelErr)
+		idx, synthErr := c.fetchSynthesizedIndex(ctx)
+		if synthErr != nil {
+			return nil, fmt.Errorf("registry has neither amaru_registry.json nor any of skills/commands/agents at the root: %w", synthErr)
 		}
-		c.format = formatVercel
+		// Synthesized indexes are always flat — the synthesizer reads top-level
+		// <type>s/ directories, so there is no nested-and-synthesized combination.
+		c.layout = LayoutFlat
+		c.source = sourceSynthesized
 		index = idx
 	} else {
 		return nil, fmt.Errorf("fetching registry index: %w", err)
@@ -295,7 +319,7 @@ func (c *GitHubClient) FetchIndex(ctx context.Context) (*RegistryIndex, error) {
 			if err != nil {
 				continue
 			}
-			index.MergeFrom(mirrorIdx)
+			index.MergeFrom(mirrorIdx, mirrorURL)
 		}
 	}
 
@@ -317,12 +341,58 @@ func initIndex(idx *RegistryIndex) {
 	}
 }
 
-// fetchVercelIndex builds a RegistryIndex from skills/*/SKILL.md in a Vercel-format repo.
-// SKILL.md files are fetched in parallel.
-func (c *GitHubClient) fetchVercelIndex(ctx context.Context) (*RegistryIndex, error) {
-	body, err := c.apiRequest(ctx, "contents/skills")
+// fetchSynthesizedIndex (formerly fetchVercelIndex) builds a RegistryIndex from
+// top-level skills/, commands/, agents/ in a foreign repo with no
+// amaru_registry.json. Description content is read from <TYPE>.md (uppercase,
+// preferred — Anthropic convention) and falls back to <type>.md (lowercase).
+// Files are fetched in parallel per directory. A registry with none of the
+// three top-level dirs is rejected; partial coverage is fine.
+func (c *GitHubClient) fetchSynthesizedIndex(ctx context.Context) (*RegistryIndex, error) {
+	idx := &RegistryIndex{
+		Skills:    make(map[string]RegistryEntry),
+		Commands:  make(map[string]RegistryEntry),
+		Agents:    make(map[string]RegistryEntry),
+		Skillsets: make(map[string]SkillsetEntry),
+	}
+
+	// scan one of the three known types; missing dirs contribute nothing.
+	var foundAny bool
+	for _, t := range []types.ItemType{types.Skill, types.Command, types.Agent} {
+		entries, err := c.scanSynthesizedType(ctx, t)
+		if err != nil {
+			if isNotFound(err) {
+				continue
+			}
+			return nil, err
+		}
+		if len(entries) == 0 {
+			continue
+		}
+		foundAny = true
+		switch t {
+		case types.Skill:
+			idx.Skills = entries
+		case types.Command:
+			idx.Commands = entries
+		case types.Agent:
+			idx.Agents = entries
+		}
+	}
+
+	if !foundAny {
+		return nil, fmt.Errorf("no skill/command/agent directories found at the repository root")
+	}
+
+	return idx, nil
+}
+
+// scanSynthesizedType lists <type>s/ at the repo root and reads each child's
+// content frontmatter (uppercase preferred, lowercase fallback) to populate
+// the description.
+func (c *GitHubClient) scanSynthesizedType(ctx context.Context, t types.ItemType) (map[string]RegistryEntry, error) {
+	body, err := c.apiRequest(ctx, "contents/"+t.DirName())
 	if err != nil {
-		return nil, fmt.Errorf("listing skills/ directory: %w", err)
+		return nil, err
 	}
 
 	var entries []struct {
@@ -330,71 +400,73 @@ func (c *GitHubClient) fetchVercelIndex(ctx context.Context) (*RegistryIndex, er
 		Type string `json:"type"`
 	}
 	if err := json.Unmarshal(body, &entries); err != nil {
-		return nil, fmt.Errorf("parsing skills directory: %w", err)
+		return nil, fmt.Errorf("parsing %s directory: %w", t.DirName(), err)
 	}
 
-	var skillDirs []string
+	var dirs []string
 	for _, e := range entries {
 		if e.Type == "dir" {
-			skillDirs = append(skillDirs, e.Name)
+			dirs = append(dirs, e.Name)
 		}
 	}
-
-	if len(skillDirs) == 0 {
-		return nil, fmt.Errorf("no skill directories found in skills/")
+	if len(dirs) == 0 {
+		return map[string]RegistryEntry{}, nil
 	}
 
-	type skillResult struct {
-		description string
-		err         error
-	}
-	results := make([]skillResult, len(skillDirs))
+	descriptions := make([]string, len(dirs))
+	errs := make([]error, len(dirs))
 
 	sem := make(chan struct{}, maxConcurrent)
 	var wg sync.WaitGroup
-
-	for i, dir := range skillDirs {
+	for i, name := range dirs {
 		wg.Add(1)
-		go func(idx int, skillName string) {
+		go func(idx int, itemName string) {
 			defer wg.Done()
 			select {
 			case sem <- struct{}{}:
 			case <-ctx.Done():
-				results[idx].err = ctx.Err()
+				errs[idx] = ctx.Err()
 				return
 			}
 			defer func() { <-sem }()
-
-			data, err := c.getFileContent(ctx, "skills/"+skillName+"/SKILL.md", "")
-			if err != nil {
-				// No SKILL.md — skip without error (keep empty description)
-				return
-			}
-			fm := parseSkillFrontmatter(data)
-			results[idx].description = fm.Description
-		}(i, dir)
+			descriptions[idx] = c.fetchSynthesizedDescription(ctx, t, itemName)
+		}(i, name)
 	}
 	wg.Wait()
-
-	for _, r := range results {
-		if r.err != nil {
-			return nil, r.err
+	for _, e := range errs {
+		if e != nil {
+			return nil, e
 		}
 	}
 
-	idx := &RegistryIndex{
-		Skills:    make(map[string]RegistryEntry),
-		Commands:  make(map[string]RegistryEntry),
-		Agents:    make(map[string]RegistryEntry),
-		Skillsets: make(map[string]SkillsetEntry),
+	out := make(map[string]RegistryEntry, len(dirs))
+	for i, d := range dirs {
+		out[d] = RegistryEntry{Description: descriptions[i]}
 	}
-	for i, dir := range skillDirs {
-		idx.Skills[dir] = RegistryEntry{
-			Description: results[i].description,
-		}
-	}
+	return out, nil
+}
 
-	return idx, nil
+// fetchSynthesizedDescription reads the per-item content file's frontmatter.
+// Tries <TYPE>.md first (Anthropic convention), then <type>.md (amaru-native).
+// Missing → empty description (no error).
+func (c *GitHubClient) fetchSynthesizedDescription(ctx context.Context, t types.ItemType, name string) string {
+	for _, fname := range synthesizedContentCandidates(t) {
+		path := t.DirName() + "/" + name + "/" + fname
+		data, err := c.getFileContent(ctx, path, "")
+		if err != nil {
+			continue
+		}
+		return parseSkillFrontmatter(data).Description
+	}
+	return ""
+}
+
+// synthesizedContentCandidates returns the per-type filenames probed for
+// frontmatter, in preferred order.
+func synthesizedContentCandidates(t types.ItemType) []string {
+	upper := strings.ToUpper(string(t)) + ".md"
+	lower := string(t) + ".md"
+	return []string{upper, lower}
 }
 
 // skillFrontmatter holds parsed YAML frontmatter fields from a SKILL.md file.
@@ -480,22 +552,24 @@ func (c *GitHubClient) ListVersions(ctx context.Context, itemType, name string) 
 }
 
 // DownloadFiles downloads all files for a specific item.
-// Format-aware: uses .amaru_registry/ for amaru-format repos, skills/ for Vercel-format.
+// Layout-aware: nested layout downloads from .amaru_registry/<type>s/<name>/,
+// flat layout downloads from <type>s/<name>/. Synthesized-source registries
+// (foreign repos with no amaru_registry.json) also use the flat <type>s/<name>/
+// shape since the synthesizer reads top-level <type>s/ dirs.
 // Always downloads from default branch — version is metadata only.
 func (c *GitHubClient) DownloadFiles(ctx context.Context, itemType, name, version string) ([]File, error) {
-	var dirPath string
-	if c.format == formatVercel {
-		dirPath = "skills/" + name
-	} else {
-		dirPath = ".amaru_registry/" + types.ItemType(itemType).DirName() + "/" + name
-	}
+	dirPath := c.layout.RelativeItemPath(types.ItemType(itemType), name)
 	return c.downloadDirectory(ctx, dirPath, "", "")
 }
 
 // FetchSkillsetManifest downloads the manifest.json for a skillset from the registry.
-// Always fetches from the default branch.
+// Always fetches from the default branch. Synthesized-source registries do not
+// support skillsets — callers get a clear error rather than a 404.
 func (c *GitHubClient) FetchSkillsetManifest(ctx context.Context, name, _ string) (*SkillsetManifest, error) {
-	filePath := ".amaru_registry/skillsets/" + name + "/manifest.json"
+	if c.source == sourceSynthesized {
+		return nil, fmt.Errorf("registry %s/%s has no amaru_registry.json and does not support skillsets", c.Owner, c.Repo)
+	}
+	filePath := c.layout.RelativeSkillsetManifestPath(name)
 	data, err := c.getFileContent(ctx, filePath, "")
 	if err != nil {
 		return nil, fmt.Errorf("fetching skillset manifest for %q: %w", name, err)

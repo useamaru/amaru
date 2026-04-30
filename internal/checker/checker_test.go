@@ -8,9 +8,9 @@ import (
 	"testing"
 
 	"github.com/Masterminds/semver/v3"
-	"github.com/barelias/amaru/internal/installer"
-	"github.com/barelias/amaru/internal/manifest"
-	"github.com/barelias/amaru/internal/registry"
+	"github.com/useamaru/amaru/internal/installer"
+	"github.com/useamaru/amaru/internal/manifest"
+	"github.com/useamaru/amaru/internal/registry"
 )
 
 // mockRegistryClient implements registry.Client for testing.

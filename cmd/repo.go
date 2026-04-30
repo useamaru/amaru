@@ -6,8 +6,8 @@ import (
 	"os"
 	"strings"
 
-	"github.com/barelias/amaru/internal/scaffold"
-	"github.com/barelias/amaru/internal/ui"
+	"github.com/useamaru/amaru/internal/scaffold"
+	"github.com/useamaru/amaru/internal/ui"
 
 	"github.com/spf13/cobra"
 )
@@ -60,10 +60,10 @@ func runRepoInit(dir string) error {
 	}
 
 	ui.Check("Registry scaffolded at %s", dir)
-	fmt.Println("  Created: amaru_registry.json, AGENTS.md, .amaru_registry/{skills,commands,agents,context}/")
+	fmt.Println("  Created: amaru_registry.json (amaru_version: \"2\"), AGENTS.md, {skills,commands,agents,context}/")
 	if project != "" {
-		fmt.Printf("  Created: .amaru_registry/context/%s/ with brainstorms/, plans/, solutions/\n", project)
-		fmt.Printf("  Created: .amaru_registry/.sparse-profiles/%s\n", project)
+		fmt.Printf("  Created: context/%s/ with brainstorms/, plans/, solutions/\n", project)
+		fmt.Printf("  Created: .sparse-profiles/%s\n", project)
 	}
 	fmt.Println("\n  Next steps:")
 	fmt.Println("    1. git init && git add . && git commit -m 'Initial registry'")

@@ -3,7 +3,7 @@ package registry
 import (
 	"testing"
 
-	"github.com/barelias/amaru/internal/types"
+	"github.com/useamaru/amaru/internal/types"
 )
 
 func TestParseGitHubURL(t *testing.T) {

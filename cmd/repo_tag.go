@@ -10,18 +10,19 @@ import (
 	"time"
 
 	"github.com/Masterminds/semver/v3"
-	"github.com/barelias/amaru/internal/registry"
-	"github.com/barelias/amaru/internal/scaffold"
-	"github.com/barelias/amaru/internal/types"
-	"github.com/barelias/amaru/internal/ui"
+	"github.com/useamaru/amaru/internal/registry"
+	"github.com/useamaru/amaru/internal/scaffold"
+	"github.com/useamaru/amaru/internal/types"
+	"github.com/useamaru/amaru/internal/ui"
 
 	"github.com/spf13/cobra"
 )
 
 var (
-	repoTagType string
-	repoTagNote string
-	repoTagPush bool
+	repoTagType    string
+	repoTagNote    string
+	repoTagPush    bool
+	repoTagCascade bool
 )
 
 var repoTagCmd = &cobra.Command{
@@ -38,7 +39,24 @@ func init() {
 	repoTagCmd.Flags().StringVarP(&repoTagType, "type", "t", "skill", "Item type: skill, command, or agent")
 	repoTagCmd.Flags().StringVarP(&repoTagNote, "note", "n", "", "Changelog note for this version")
 	repoTagCmd.Flags().BoolVar(&repoTagPush, "push", false, "Push the tag to remote after creation")
+	repoTagCmd.Flags().BoolVar(&repoTagCascade, "cascade", false, "Patch-bump every skillset whose Items contain this item")
 	repoCmd.AddCommand(repoTagCmd)
+}
+
+// nextPatchVersion returns the patch-incremented form of an existing semver,
+// or "0.1.0" when the input is empty (skillsets often start unversioned).
+// Returns an error for non-empty inputs that fail to parse so the cascade
+// aborts cleanly instead of silently writing junk.
+func nextPatchVersion(current string) (string, error) {
+	if current == "" {
+		return "0.1.0", nil
+	}
+	v, err := semver.NewVersion(current)
+	if err != nil {
+		return "", fmt.Errorf("not a valid semver %q: %w", current, err)
+	}
+	next := v.IncPatch()
+	return next.String(), nil
 }
 
 func runRepoTag(name, versionStr string) error {
@@ -74,8 +92,12 @@ func runRepoTag(name, versionStr string) error {
 		return fmt.Errorf("%s %q not found in registry index", itemType.Singular(), name)
 	}
 
-	// Verify item directory and manifest exist
-	itemDir := filepath.Join(dir, ".amaru_registry", itemType.DirName(), name)
+	// Verify item directory and manifest exist (path resolved via index layout).
+	layout, err := registry.LayoutFor(idx)
+	if err != nil {
+		return err
+	}
+	itemDir := layout.ItemDir(dir, itemType, name)
 	manifestPath := filepath.Join(itemDir, "manifest.json")
 	manifestData, err := os.ReadFile(manifestPath)
 	if err != nil {
@@ -117,8 +139,31 @@ func runRepoTag(name, versionStr string) error {
 	entry.Latest = versionStr
 	entries[name] = entry
 	scaffold.SetEntriesForType(idx, itemType, entries)
-	scaffold.TouchUpdatedAt(idx)
 
+	// Cascade into skillsets that include this item. Validate every member
+	// skillset's Latest value before any write so a malformed value aborts
+	// the cascade with no partial state.
+	var cascaded []string
+	if repoTagCascade {
+		hits := idx.SkillsetsContaining(itemType, name)
+		bumps := make(map[string]string, len(hits))
+		for _, ssName := range hits {
+			ss := idx.Skillsets[ssName]
+			next, err := nextPatchVersion(ss.Latest)
+			if err != nil {
+				return fmt.Errorf("cannot cascade into skillset %q: %w (set Latest to a valid semver, e.g. 0.1.0, then re-run)", ssName, err)
+			}
+			bumps[ssName] = next
+		}
+		for ssName, next := range bumps {
+			ss := idx.Skillsets[ssName]
+			ss.Latest = next
+			idx.Skillsets[ssName] = ss
+			cascaded = append(cascaded, ssName)
+		}
+	}
+
+	scaffold.TouchUpdatedAt(idx)
 	if err := scaffold.SaveLocalIndex(dir, idx); err != nil {
 		return err
 	}
@@ -143,6 +188,9 @@ func runRepoTag(name, versionStr string) error {
 
 	ui.Check("Tagged %s %q as v%s", itemType.Singular(), name, versionStr)
 	fmt.Printf("  Tag: %s\n", tagName)
+	if len(cascaded) > 0 {
+		ui.Check("Cascaded patch bumps into %d skillset(s): %s", len(cascaded), strings.Join(cascaded, ", "))
+	}
 
 	if repoTagPush {
 		pushCmd := exec.Command("git", "push", "--follow-tags")

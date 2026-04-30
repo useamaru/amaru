@@ -6,18 +6,18 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/barelias/amaru/internal/registry"
-	"github.com/barelias/amaru/internal/scaffold"
+	"github.com/useamaru/amaru/internal/registry"
+	"github.com/useamaru/amaru/internal/scaffold"
 )
 
-// scaffoldTestRegistry creates a minimal registry in a temp dir for testing.
+// scaffoldTestRegistry creates a minimal v2 (flat layout) registry in a temp dir.
 func scaffoldTestRegistry(t *testing.T) string {
 	t.Helper()
 	dir := t.TempDir()
 
 	idx := &registry.RegistryIndex{
-		AmaruVersion: "1",
-		UpdatedAt:    "2026-03-05",
+		AmaruVersion: "2",
+		UpdatedAt:    "2026-04-30",
 		Skills:       map[string]registry.RegistryEntry{},
 		Commands:     map[string]registry.RegistryEntry{},
 		Agents:       map[string]registry.RegistryEntry{},
@@ -27,9 +27,9 @@ func scaffoldTestRegistry(t *testing.T) string {
 		t.Fatalf("saving index: %v", err)
 	}
 
-	// Create type directories
+	// Create type directories at the repo root (v2 flat layout).
 	for _, d := range []string{"skills", "commands", "agents"} {
-		if err := os.MkdirAll(filepath.Join(dir, ".amaru_registry", d), 0755); err != nil {
+		if err := os.MkdirAll(filepath.Join(dir, d), 0755); err != nil {
 			t.Fatalf("creating dir: %v", err)
 		}
 	}
@@ -37,7 +37,7 @@ func scaffoldTestRegistry(t *testing.T) string {
 	return dir
 }
 
-// scaffoldTestRegistryWithSkill creates a registry with one skill already added.
+// scaffoldTestRegistryWithSkill creates a v2 registry with one skill already added.
 func scaffoldTestRegistryWithSkill(t *testing.T, name string) string {
 	t.Helper()
 	dir := scaffoldTestRegistry(t)
@@ -50,8 +50,8 @@ func scaffoldTestRegistryWithSkill(t *testing.T, name string) string {
 	}
 	scaffold.SaveLocalIndex(dir, idx)
 
-	// Create skill directory and files
-	skillDir := filepath.Join(dir, ".amaru_registry", "skills", name)
+	// Create skill directory and files at the flat path.
+	skillDir := filepath.Join(dir, "skills", name)
 	os.MkdirAll(skillDir, 0755)
 
 	manifest := registry.ItemManifest{
@@ -59,6 +59,43 @@ func scaffoldTestRegistryWithSkill(t *testing.T, name string) string {
 		Type:        "skill",
 		Version:     "",
 		Description: "A test skill",
+		Author:      "test",
+		Files:       []string{"skill.md"},
+		Tags:        []string{"test"},
+	}
+	data, _ := json.MarshalIndent(manifest, "", "  ")
+	os.WriteFile(filepath.Join(skillDir, "manifest.json"), data, 0644)
+	os.WriteFile(filepath.Join(skillDir, "skill.md"), []byte("# test\n"), 0644)
+
+	return dir
+}
+
+// scaffoldLegacyTestRegistry creates a v1 (nested) registry — used to assert
+// that legacy registries still read correctly via the layout helper.
+func scaffoldLegacyTestRegistry(t *testing.T, name string) string {
+	t.Helper()
+	dir := t.TempDir()
+
+	idx := &registry.RegistryIndex{
+		AmaruVersion: "1",
+		UpdatedAt:    "2026-03-05",
+		Skills: map[string]registry.RegistryEntry{
+			name: {Description: "A legacy skill", Tags: []string{"test"}},
+		},
+		Commands:  map[string]registry.RegistryEntry{},
+		Agents:    map[string]registry.RegistryEntry{},
+		Skillsets: map[string]registry.SkillsetEntry{},
+	}
+	if err := scaffold.SaveLocalIndex(dir, idx); err != nil {
+		t.Fatalf("saving legacy index: %v", err)
+	}
+
+	skillDir := filepath.Join(dir, ".amaru_registry", "skills", name)
+	os.MkdirAll(skillDir, 0755)
+	manifest := registry.ItemManifest{
+		Name:        name,
+		Type:        "skill",
+		Description: "A legacy skill",
 		Author:      "test",
 		Files:       []string{"skill.md"},
 		Tags:        []string{"test"},
@@ -87,10 +124,14 @@ func TestRepoAddCreatesSkill(t *testing.T) {
 		t.Fatalf("runRepoAdd() error = %v", err)
 	}
 
-	// Verify directory was created
-	skillDir := filepath.Join(dir, ".amaru_registry", "skills", "my-skill")
+	// Verify directory was created at the v2 flat path.
+	skillDir := filepath.Join(dir, "skills", "my-skill")
 	if _, err := os.Stat(skillDir); os.IsNotExist(err) {
 		t.Fatal("skill directory not created")
+	}
+	// And not at the legacy nested path.
+	if _, err := os.Stat(filepath.Join(dir, ".amaru_registry", "skills", "my-skill")); !os.IsNotExist(err) {
+		t.Errorf("v2 repo add should not create legacy .amaru_registry/ path (err=%v)", err)
 	}
 
 	// Verify manifest.json
@@ -181,8 +222,8 @@ func TestRepoAddCommand(t *testing.T) {
 		t.Fatalf("runRepoAdd() error = %v", err)
 	}
 
-	// Verify command directory
-	cmdDir := filepath.Join(dir, ".amaru_registry", "commands", "my-cmd")
+	// Verify command directory at flat path.
+	cmdDir := filepath.Join(dir, "commands", "my-cmd")
 	if _, err := os.Stat(filepath.Join(cmdDir, "command.md")); os.IsNotExist(err) {
 		t.Fatal("command.md not created")
 	}
@@ -255,8 +296,8 @@ func TestRepoRemoveSkill(t *testing.T) {
 		t.Fatal("to-remove still in index")
 	}
 
-	// Verify directory removed
-	skillDir := filepath.Join(dir, ".amaru_registry", "skills", "to-remove")
+	// Verify directory removed at flat path.
+	skillDir := filepath.Join(dir, "skills", "to-remove")
 	if _, err := os.Stat(skillDir); !os.IsNotExist(err) {
 		t.Fatal("skill directory not removed")
 	}
@@ -328,5 +369,37 @@ func TestRepoValidateErrors(t *testing.T) {
 
 	if err := runRepoValidate(); err == nil {
 		t.Fatal("expected validation error for missing directory")
+	}
+}
+
+// TestRepoValidateOnLegacyRegistry proves repo subcommands still read v1
+// (nested) registries correctly after the v2 write flip.
+func TestRepoValidateOnLegacyRegistry(t *testing.T) {
+	dir := scaffoldLegacyTestRegistry(t, "legacy-skill")
+	origDir, _ := os.Getwd()
+	defer os.Chdir(origDir)
+	os.Chdir(dir)
+
+	if err := runRepoValidate(); err != nil {
+		t.Fatalf("validate on v1 registry should succeed, got: %v", err)
+	}
+}
+
+func TestRepoRemoveOnLegacyRegistry(t *testing.T) {
+	dir := scaffoldLegacyTestRegistry(t, "to-remove")
+	origDir, _ := os.Getwd()
+	defer os.Chdir(origDir)
+	os.Chdir(dir)
+
+	repoRemoveType = "skill"
+	repoRemoveForce = false
+
+	if err := runRepoRemove("to-remove"); err != nil {
+		t.Fatalf("remove on v1 registry should succeed, got: %v", err)
+	}
+
+	// The legacy nested directory should be gone.
+	if _, err := os.Stat(filepath.Join(dir, ".amaru_registry", "skills", "to-remove")); !os.IsNotExist(err) {
+		t.Error("legacy skill directory should have been removed")
 	}
 }

@@ -15,8 +15,8 @@ func TestScaffoldRepo(t *testing.T) {
 		t.Fatalf("ScaffoldRepo error: %v", err)
 	}
 
-	// Verify required directories
-	for _, d := range []string{".amaru_registry/skills", ".amaru_registry/commands", ".amaru_registry/agents", ".amaru_registry/context", ".amaru_registry/.sparse-profiles"} {
+	// Verify required directories — v2 flat layout, no .amaru_registry/ prefix.
+	for _, d := range []string{"skills", "commands", "agents", "context", ".sparse-profiles"} {
 		info, err := os.Stat(filepath.Join(dir, d))
 		if err != nil {
 			t.Errorf("expected directory %s: %v", d, err)
@@ -25,7 +25,12 @@ func TestScaffoldRepo(t *testing.T) {
 		}
 	}
 
-	// Verify amaru_registry.json
+	// Confirm no legacy .amaru_registry/ directory was created.
+	if _, err := os.Stat(filepath.Join(dir, ".amaru_registry")); !os.IsNotExist(err) {
+		t.Errorf("v2 scaffold should not create .amaru_registry/ (err=%v)", err)
+	}
+
+	// Verify amaru_registry.json — must be v2.
 	data, err := os.ReadFile(filepath.Join(dir, "amaru_registry.json"))
 	if err != nil {
 		t.Fatalf("reading amaru_registry.json: %v", err)
@@ -37,8 +42,8 @@ func TestScaffoldRepo(t *testing.T) {
 	if _, ok := idx["skills"]; !ok {
 		t.Error("amaru_registry.json missing skills key")
 	}
-	if _, ok := idx["amaru_version"]; !ok {
-		t.Error("amaru_registry.json missing amaru_version key")
+	if v := idx["amaru_version"]; v != "2" {
+		t.Errorf("amaru_version = %v, want \"2\"", v)
 	}
 
 	// Verify AGENTS.md
@@ -46,8 +51,8 @@ func TestScaffoldRepo(t *testing.T) {
 		t.Error("expected AGENTS.md")
 	}
 
-	// Verify .gitkeep files
-	for _, d := range []string{".amaru_registry/skills", ".amaru_registry/commands", ".amaru_registry/agents"} {
+	// Verify .gitkeep files at flat paths.
+	for _, d := range []string{"skills", "commands", "agents"} {
 		if _, err := os.Stat(filepath.Join(dir, d, ".gitkeep")); err != nil {
 			t.Errorf("expected .gitkeep in %s", d)
 		}
@@ -61,19 +66,19 @@ func TestScaffoldRepoWithProject(t *testing.T) {
 		t.Fatalf("ScaffoldRepo error: %v", err)
 	}
 
-	// Verify project-specific directories
+	// Verify project-specific directories at flat paths.
 	for _, d := range []string{
-		".amaru_registry/context/myapp/brainstorms",
-		".amaru_registry/context/myapp/plans",
-		".amaru_registry/context/myapp/solutions",
+		"context/myapp/brainstorms",
+		"context/myapp/plans",
+		"context/myapp/solutions",
 	} {
 		if _, err := os.Stat(filepath.Join(dir, d)); err != nil {
 			t.Errorf("expected directory %s: %v", d, err)
 		}
 	}
 
-	// Verify project AGENTS.md
-	data, err := os.ReadFile(filepath.Join(dir, ".amaru_registry", "context", "myapp", "AGENTS.md"))
+	// Verify project AGENTS.md at flat path.
+	data, err := os.ReadFile(filepath.Join(dir, "context", "myapp", "AGENTS.md"))
 	if err != nil {
 		t.Fatalf("reading project AGENTS.md: %v", err)
 	}
@@ -81,13 +86,17 @@ func TestScaffoldRepoWithProject(t *testing.T) {
 		t.Error("project AGENTS.md should reference project name")
 	}
 
-	// Verify sparse profile
-	data, err = os.ReadFile(filepath.Join(dir, ".amaru_registry", ".sparse-profiles", "myapp"))
+	// Verify sparse profile at flat path with v2 body.
+	data, err = os.ReadFile(filepath.Join(dir, ".sparse-profiles", "myapp"))
 	if err != nil {
 		t.Fatalf("reading sparse profile: %v", err)
 	}
-	if !strings.Contains(string(data), ".amaru_registry/context/myapp") {
-		t.Error("sparse profile should reference project context path")
+	body := string(data)
+	if !strings.Contains(body, "context/myapp") {
+		t.Error("sparse profile should reference flat context path")
+	}
+	if strings.Contains(body, ".amaru_registry/") {
+		t.Error("v2 sparse profile should not contain .amaru_registry/ prefix")
 	}
 }
 
@@ -113,8 +122,11 @@ func TestProjectAgentsMD(t *testing.T) {
 
 func TestSparseProfile(t *testing.T) {
 	content := SparseProfile("myapp")
-	if !strings.Contains(content, ".amaru_registry/context/myapp") {
-		t.Error("expected .amaru_registry/context/myapp path")
+	if !strings.Contains(content, "context/myapp") {
+		t.Error("expected context/myapp path")
+	}
+	if strings.Contains(content, ".amaru_registry/") {
+		t.Error("v2 sparse profile must not contain .amaru_registry/ prefix")
 	}
 	if !strings.Contains(content, "[include]") {
 		t.Error("expected [include] section")

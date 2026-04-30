@@ -4,11 +4,11 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/barelias/amaru/internal/installer"
-	"github.com/barelias/amaru/internal/manifest"
-	"github.com/barelias/amaru/internal/registry"
-	"github.com/barelias/amaru/internal/types"
-	"github.com/barelias/amaru/internal/ui"
+	"github.com/useamaru/amaru/internal/installer"
+	"github.com/useamaru/amaru/internal/manifest"
+	"github.com/useamaru/amaru/internal/registry"
+	"github.com/useamaru/amaru/internal/types"
+	"github.com/useamaru/amaru/internal/ui"
 
 	"github.com/Masterminds/semver/v3"
 	"github.com/spf13/cobra"
@@ -72,6 +72,12 @@ func runList(ctx context.Context) error {
 					displayVersion = "latest"
 				}
 				origin := fmt.Sprintf("[%s]", entry.Registry)
+				// Annotate mirror provenance when the live index records a Source.
+				if idx, ok := indexes[entry.Registry]; ok {
+					if regEntry, ok := idx.EntriesForType(itemType)[name]; ok && regEntry.Source != "" {
+						origin = fmt.Sprintf("[%s ← mirror:%s]", entry.Registry, regEntry.Source)
+					}
+				}
 				// Show skillset provenance from lock membership
 				memberKey := fmt.Sprintf("%s/%s", itemType, name)
 				if ssName, ok := skillsetMembership[memberKey]; ok {

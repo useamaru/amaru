@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/barelias/amaru/internal/checker"
-	"github.com/barelias/amaru/internal/ui"
+	"github.com/useamaru/amaru/internal/checker"
+	"github.com/useamaru/amaru/internal/ui"
 
 	"github.com/spf13/cobra"
 )

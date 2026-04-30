@@ -3,7 +3,7 @@ package cmd
 import (
 	"fmt"
 
-	"github.com/barelias/amaru/internal/manifest"
+	"github.com/useamaru/amaru/internal/manifest"
 
 	"github.com/spf13/cobra"
 )

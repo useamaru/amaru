@@ -1,4 +1,4 @@
-module github.com/barelias/amaru
+module github.com/useamaru/amaru
 
 go 1.23.3
 

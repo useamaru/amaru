@@ -3,12 +3,11 @@ package cmd
 import (
 	"fmt"
 	"os"
-	"path/filepath"
 
-	"github.com/barelias/amaru/internal/registry"
-	"github.com/barelias/amaru/internal/scaffold"
-	"github.com/barelias/amaru/internal/types"
-	"github.com/barelias/amaru/internal/ui"
+	"github.com/useamaru/amaru/internal/registry"
+	"github.com/useamaru/amaru/internal/scaffold"
+	"github.com/useamaru/amaru/internal/types"
+	"github.com/useamaru/amaru/internal/ui"
 
 	"github.com/spf13/cobra"
 )
@@ -83,8 +82,12 @@ func runRepoRemove(name string) error {
 		return err
 	}
 
-	// Remove directory
-	itemDir := filepath.Join(dir, ".amaru_registry", itemType.DirName(), name)
+	// Remove directory using the index's declared layout.
+	layout, err := registry.LayoutFor(idx)
+	if err != nil {
+		return err
+	}
+	itemDir := layout.ItemDir(dir, itemType, name)
 	if _, err := os.Stat(itemDir); err == nil {
 		if err := os.RemoveAll(itemDir); err != nil {
 			ui.Warn("Could not remove directory %s: %v", itemDir, err)

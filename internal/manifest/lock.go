@@ -9,7 +9,7 @@ import (
 	"sort"
 	"time"
 
-	"github.com/barelias/amaru/internal/types"
+	"github.com/useamaru/amaru/internal/types"
 )
 
 const LockFile = "amaru.lock"
