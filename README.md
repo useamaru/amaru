@@ -1,6 +1,6 @@
-# 🐍 amaru
+# Amaru
 
-**Skills, commands & agents manager for Claude Code.**
+**Skills, commands & agents manager.**
 
 amaru connects your projects to centralized registries hosted on GitHub — managing skills, commands, and agents. It tracks versions, detects local drift, warns about updates, syncs shared context documentation, and keeps your whole team in sync — all through a simple manifest file.
 
