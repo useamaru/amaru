@@ -26,3 +26,37 @@ jobs:
           args: release --clean
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  npm-publish:
+    needs: release
+    runs-on: ubuntu-latest
+    # Only run if the NPM_TOKEN secret is configured. Without it, this is a no-op
+    # — Go binary releases continue to ship.
+    if: ${{ needs.release.result == 'success' }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          registry-url: "https://registry.npmjs.org"
+
+      - name: Sync npm package version to tag
+        working-directory: npm
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          npm version "$VERSION" --no-git-tag-version --allow-same-version
+
+      - name: Publish to npm
+        working-directory: npm
+        # AMARU_SKIP_DOWNLOAD=1 stops the publisher's own install hook from
+        # trying to download a binary that may not be uploaded yet when this
+        # job's npm sandbox runs `npm install` during pack/publish.
+        run: |
+          if [ -z "${NODE_AUTH_TOKEN:-}" ]; then
+            echo "NPM_TOKEN not set — skipping npm publish."
+            exit 0
+          fi
+          AMARU_SKIP_DOWNLOAD=1 npm publish --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

@@ -10,7 +10,26 @@ amaru connects your projects to centralized registries hosted on GitHub — mana
 
 ## Install
 
-**Quick install** (Linux/macOS):
+**With npx** (no install — runs the latest published version):
+
+```bash
+npx amaru init
+npx amaru install
+```
+
+**With npm** (global install):
+
+```bash
+npm install -g amaru
+amaru --help
+```
+
+The npm package is a thin wrapper around the Go binary — it downloads the
+prebuilt release for your platform from GitHub Releases on `npm install`. See
+[`npm/README.md`](npm/README.md) for environment variables (`AMARU_VERSION`,
+`AMARU_SKIP_DOWNLOAD`, etc.).
+
+**Quick install** (Linux/macOS, no Node required):
 
 ```bash
 OS=$(uname -s | tr '[:upper:]' '[:lower:]')
@@ -417,6 +436,26 @@ my-skills-registry/
 
 This shape matches other Claude Code skill registries (e.g. `vercel-labs/agent-skills`, `jeremylongshore/claude-code-plugins-plus-skills`), so any such repo is droppable as an amaru registry without restructuring. amaru still reads the legacy `.amaru_registry/`-prefixed (v1) layout for backward compatibility — run `amaru repo migrate` to upgrade an old registry to v2 (see Commands).
 
+**Folders** — skills/commands/agents can optionally be organized into folders for source-tree readability:
+
+```
+skills/
+├── research/                # flat — addressed as "research"
+└── dev/                     # folder (cosmetic, not part of the name)
+    └── bootstrap/           # addressed as "bootstrap" (NOT "dev/bootstrap")
+        ├── manifest.json
+        └── skill.md
+```
+
+Folders are purely a registry-side organization aid. The folder name never appears in the item's identity:
+
+- Item name in `amaru.json`: `bootstrap` (not `dev/bootstrap`)
+- Git tag: `skill/bootstrap/1.0.0` (no folder)
+- Install path: `.claude/skills/bootstrap/` (no folder)
+- Index key: `bootstrap`, with a `"folder": "dev"` field on the entry
+
+Create a folder-organized item with `amaru repo add <name> --folder <folder>`. Existing flat items keep working unchanged.
+
 Versions are tracked via git tags: `skill/research/1.0.3`, `command/dev/bootstrap/2.0.0`, `agent/code-reviewer/1.0.0`.
 
 Skillsets are defined in `amaru_registry.json`:
@@ -500,9 +539,16 @@ $ amaru repo add research
 $ amaru repo add deploy --type command -d "Deploy to production"
   ✓ Created command "deploy"
 
+$ amaru repo add bootstrap --folder dev
+  ✓ Created skill "bootstrap"
+  Directory: skills/dev/bootstrap/
+  Content:   skills/dev/bootstrap/skill.md
+
 $ amaru repo add starter-pack --type skillset --items "skill/research,command/deploy"
   ✓ Created skillset "starter-pack" with 2 items
 ```
+
+Pass `--folder <name>` to organize an item under a subdirectory — the folder is cosmetic (not part of the item's name, tag, or install path). See "Folders" in the Registry Structure section.
 
 ### `amaru repo remove <name> [--type skill|command|agent|skillset] [--force]`
 

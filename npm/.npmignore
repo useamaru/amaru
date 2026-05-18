@@ -1,0 +1,4 @@
+bin/amaru
+bin/amaru.exe
+*.tar.gz
+*.zip

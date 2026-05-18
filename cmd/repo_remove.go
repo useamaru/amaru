@@ -54,7 +54,8 @@ func runRepoRemove(name string) error {
 		return fmt.Errorf("invalid item type %q", repoRemoveType)
 	}
 
-	if _, exists := entries[name]; !exists {
+	entry, exists := entries[name]
+	if !exists {
 		return fmt.Errorf("%s %q not found in registry", itemType.Singular(), name)
 	}
 
@@ -87,7 +88,7 @@ func runRepoRemove(name string) error {
 	if err != nil {
 		return err
 	}
-	itemDir := layout.ItemDir(dir, itemType, name)
+	itemDir := layout.ItemDir(dir, itemType, registry.ItemSubPath(entry.Folder, name))
 	if _, err := os.Stat(itemDir); err == nil {
 		if err := os.RemoveAll(itemDir); err != nil {
 			ui.Warn("Could not remove directory %s: %v", itemDir, err)

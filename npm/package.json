@@ -1,0 +1,45 @@
+{
+  "name": "amaru",
+  "version": "0.0.0",
+  "description": "Skills, commands & agents manager for Claude Code (npm wrapper for the Go binary)",
+  "keywords": [
+    "amaru",
+    "claude-code",
+    "skills",
+    "agents",
+    "cli"
+  ],
+  "homepage": "https://github.com/useamaru/amaru",
+  "bugs": "https://github.com/useamaru/amaru/issues",
+  "license": "MIT",
+  "author": "amaru contributors",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/useamaru/amaru.git"
+  },
+  "bin": {
+    "amaru": "bin/amaru.js"
+  },
+  "scripts": {
+    "postinstall": "node install.js",
+    "preuninstall": "node uninstall.js"
+  },
+  "files": [
+    "bin/amaru.js",
+    "install.js",
+    "uninstall.js",
+    "README.md"
+  ],
+  "engines": {
+    "node": ">=14"
+  },
+  "os": [
+    "linux",
+    "darwin",
+    "win32"
+  ],
+  "cpu": [
+    "x64",
+    "arm64"
+  ]
+}

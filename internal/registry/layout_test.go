@@ -1,7 +1,9 @@
 package registry
 
 import (
+	"encoding/json"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/useamaru/amaru/internal/types"
@@ -63,6 +65,115 @@ func TestLayout_String(t *testing.T) {
 		if got := l.String(); got != want {
 			t.Errorf("Layout(%d).String() = %q, want %q", l, got, want)
 		}
+	}
+}
+
+func TestItemSubPath(t *testing.T) {
+	tests := []struct {
+		name   string
+		folder string
+		item   string
+		want   string
+	}{
+		{"empty folder returns name", "", "research", "research"},
+		{"single-segment folder", "dev", "research", "dev/research"},
+		{"multi-segment folder", "dev/team-a", "research", "dev/team-a/research"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := ItemSubPath(tt.folder, tt.item); got != tt.want {
+				t.Errorf("ItemSubPath(%q, %q) = %q, want %q", tt.folder, tt.item, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestValidateFolder(t *testing.T) {
+	tests := []struct {
+		folder  string
+		wantErr bool
+	}{
+		{"", false},
+		{"dev", false},
+		{"dev/team-a", false},
+		{"a/b/c", false},
+		{"my-folder", false},
+		{"Dev", true},          // uppercase
+		{"1bad", true},         // starts with digit
+		{"-bad", true},         // starts with hyphen
+		{"/leading", true},     // leading slash
+		{"trailing/", true},    // trailing slash
+		{"dev//double", true},  // empty segment
+		{"../escape", true},    // path traversal
+		{"foo bar", true},      // space
+	}
+	for _, tt := range tests {
+		t.Run(tt.folder, func(t *testing.T) {
+			err := ValidateFolder(tt.folder)
+			if tt.wantErr && err == nil {
+				t.Errorf("ValidateFolder(%q) expected error, got nil", tt.folder)
+			}
+			if !tt.wantErr && err != nil {
+				t.Errorf("ValidateFolder(%q) unexpected error: %v", tt.folder, err)
+			}
+		})
+	}
+}
+
+func TestLayout_ItemDir_WithFolder(t *testing.T) {
+	root := "/tmp/reg"
+	// When the caller passes ItemSubPath(folder, name) as the subpath argument,
+	// ItemDir should resolve correctly under both layouts.
+	got := LayoutFlat.ItemDir(root, types.Skill, ItemSubPath("dev", "research"))
+	if got != filepath.Join(root, "skills", "dev", "research") {
+		t.Errorf("flat ItemDir with folder = %q", got)
+	}
+	got = LayoutNested.ItemDir(root, types.Skill, ItemSubPath("dev", "research"))
+	if got != filepath.Join(root, ".amaru_registry", "skills", "dev", "research") {
+		t.Errorf("nested ItemDir with folder = %q", got)
+	}
+}
+
+func TestLayout_RelativeItemPath_WithFolder(t *testing.T) {
+	got := LayoutFlat.RelativeItemPath(types.Skill, ItemSubPath("dev", "research"))
+	if got != "skills/dev/research" {
+		t.Errorf("flat RelativeItemPath with folder = %q", got)
+	}
+	got = LayoutNested.RelativeItemPath(types.Skill, ItemSubPath("dev", "research"))
+	if got != ".amaru_registry/skills/dev/research" {
+		t.Errorf("nested RelativeItemPath with folder = %q", got)
+	}
+}
+
+func TestRegistryEntry_FolderJSONRoundTrip(t *testing.T) {
+	idx := &RegistryIndex{
+		AmaruVersion: "2",
+		Skills: map[string]RegistryEntry{
+			"research": {Latest: "1.0.0", Description: "x", Folder: "dev"},
+			"plain":    {Latest: "1.0.0", Description: "y"},
+		},
+	}
+	data, err := json.Marshal(idx)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	// folder appears only for entries that declare one
+	if !strings.Contains(string(data), `"folder":"dev"`) {
+		t.Errorf("expected folder field in JSON, got: %s", string(data))
+	}
+	if strings.Contains(string(data), `"folder":""`) {
+		t.Errorf("did not expect empty folder field, got: %s", string(data))
+	}
+
+	var back RegistryIndex
+	if err := json.Unmarshal(data, &back); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if back.Skills["research"].Folder != "dev" {
+		t.Errorf("round-trip Folder = %q, want dev", back.Skills["research"].Folder)
+	}
+	if back.Skills["plain"].Folder != "" {
+		t.Errorf("plain entry Folder = %q, want empty", back.Skills["plain"].Folder)
 	}
 }
 

@@ -88,16 +88,17 @@ func runRepoTag(name, versionStr string) error {
 	}
 
 	entries := idx.EntriesForType(itemType)
-	if _, exists := entries[name]; !exists {
+	entry, exists := entries[name]
+	if !exists {
 		return fmt.Errorf("%s %q not found in registry index", itemType.Singular(), name)
 	}
 
-	// Verify item directory and manifest exist (path resolved via index layout).
+	// Verify item directory and manifest exist (path resolved via index layout + folder).
 	layout, err := registry.LayoutFor(idx)
 	if err != nil {
 		return err
 	}
-	itemDir := layout.ItemDir(dir, itemType, name)
+	itemDir := layout.ItemDir(dir, itemType, registry.ItemSubPath(entry.Folder, name))
 	manifestPath := filepath.Join(itemDir, "manifest.json")
 	manifestData, err := os.ReadFile(manifestPath)
 	if err != nil {
@@ -135,7 +136,6 @@ func runRepoTag(name, versionStr string) error {
 	}
 
 	// Update index
-	entry := entries[name]
 	entry.Latest = versionStr
 	entries[name] = entry
 	scaffold.SetEntriesForType(idx, itemType, entries)

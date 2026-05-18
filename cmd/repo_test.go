@@ -385,6 +385,150 @@ func TestRepoValidateOnLegacyRegistry(t *testing.T) {
 	}
 }
 
+func TestRepoAddWithFolder(t *testing.T) {
+	dir := scaffoldTestRegistry(t)
+	origDir, _ := os.Getwd()
+	defer os.Chdir(origDir)
+	os.Chdir(dir)
+
+	repoAddType = "skill"
+	repoAddDescription = "Test skill in folder"
+	repoAddAuthor = "tester"
+	repoAddTags = ""
+	repoAddItems = ""
+	repoAddFolder = "dev"
+	defer func() { repoAddFolder = "" }()
+
+	if err := runRepoAdd("research"); err != nil {
+		t.Fatalf("runRepoAdd() error = %v", err)
+	}
+
+	// Skill should live at skills/dev/research/
+	if _, err := os.Stat(filepath.Join(dir, "skills", "dev", "research", "manifest.json")); os.IsNotExist(err) {
+		t.Fatal("manifest.json not created at skills/dev/research/")
+	}
+	// And NOT at skills/research/
+	if _, err := os.Stat(filepath.Join(dir, "skills", "research")); !os.IsNotExist(err) {
+		t.Errorf("skill should not exist at flat path when folder is set; err=%v", err)
+	}
+
+	idx, _ := scaffold.LoadLocalIndex(dir)
+	entry, ok := idx.Skills["research"]
+	if !ok {
+		t.Fatal("research not in index — folder must not be part of the item name")
+	}
+	if entry.Folder != "dev" {
+		t.Errorf("entry Folder = %q, want %q", entry.Folder, "dev")
+	}
+}
+
+func TestRepoAddRejectsInvalidFolder(t *testing.T) {
+	dir := scaffoldTestRegistry(t)
+	origDir, _ := os.Getwd()
+	defer os.Chdir(origDir)
+	os.Chdir(dir)
+
+	repoAddType = "skill"
+	repoAddDescription = ""
+	repoAddAuthor = ""
+	repoAddTags = ""
+	repoAddItems = ""
+	repoAddFolder = "Bad Folder"
+	defer func() { repoAddFolder = "" }()
+
+	if err := runRepoAdd("research"); err == nil {
+		t.Fatal("expected error for invalid folder")
+	}
+}
+
+// TestRepoValidateWithFolder verifies that validate finds folder-organized
+// skills correctly and doesn't flag the folder itself as an orphan.
+func TestRepoValidateWithFolder(t *testing.T) {
+	dir := scaffoldTestRegistry(t)
+	origDir, _ := os.Getwd()
+	defer os.Chdir(origDir)
+	os.Chdir(dir)
+
+	// Build a skill at skills/dev/research/ manually.
+	skillDir := filepath.Join(dir, "skills", "dev", "research")
+	os.MkdirAll(skillDir, 0755)
+	manifest := registry.ItemManifest{
+		Name:        "research",
+		Type:        "skill",
+		Description: "folder-organized",
+		Author:      "tester",
+		Files:       []string{"skill.md"},
+	}
+	data, _ := json.MarshalIndent(manifest, "", "  ")
+	os.WriteFile(filepath.Join(skillDir, "manifest.json"), data, 0644)
+	os.WriteFile(filepath.Join(skillDir, "skill.md"), []byte("# r\n"), 0644)
+
+	idx, _ := scaffold.LoadLocalIndex(dir)
+	idx.Skills["research"] = registry.RegistryEntry{
+		Description: "folder-organized",
+		Folder:      "dev",
+	}
+	scaffold.SaveLocalIndex(dir, idx)
+
+	if err := runRepoValidate(); err != nil {
+		t.Fatalf("validate on folder-organized registry should succeed, got: %v", err)
+	}
+}
+
+// TestRepoValidateFlagsFolderOrphan verifies that a skill on disk inside a
+// folder but not in the index is reported as an orphan.
+func TestRepoValidateFlagsFolderOrphan(t *testing.T) {
+	dir := scaffoldTestRegistry(t)
+	origDir, _ := os.Getwd()
+	defer os.Chdir(origDir)
+	os.Chdir(dir)
+
+	// Orphan: skills/dev/orphan/ with manifest.json but no index entry.
+	orphanDir := filepath.Join(dir, "skills", "dev", "orphan")
+	os.MkdirAll(orphanDir, 0755)
+	manifest := registry.ItemManifest{Name: "orphan", Type: "skill"}
+	data, _ := json.MarshalIndent(manifest, "", "  ")
+	os.WriteFile(filepath.Join(orphanDir, "manifest.json"), data, 0644)
+
+	// Validate should succeed (orphans are warnings, not errors) but warn.
+	if err := runRepoValidate(); err != nil {
+		t.Fatalf("validate should warn but not error on orphans, got: %v", err)
+	}
+}
+
+func TestRepoRemoveWithFolder(t *testing.T) {
+	dir := scaffoldTestRegistry(t)
+	origDir, _ := os.Getwd()
+	defer os.Chdir(origDir)
+	os.Chdir(dir)
+
+	// Set up a folder-organized skill.
+	skillDir := filepath.Join(dir, "skills", "dev", "research")
+	os.MkdirAll(skillDir, 0755)
+	manifest := registry.ItemManifest{Name: "research", Type: "skill", Files: []string{"skill.md"}}
+	data, _ := json.MarshalIndent(manifest, "", "  ")
+	os.WriteFile(filepath.Join(skillDir, "manifest.json"), data, 0644)
+	os.WriteFile(filepath.Join(skillDir, "skill.md"), []byte("# r\n"), 0644)
+
+	idx, _ := scaffold.LoadLocalIndex(dir)
+	idx.Skills["research"] = registry.RegistryEntry{Folder: "dev"}
+	scaffold.SaveLocalIndex(dir, idx)
+
+	repoRemoveType = "skill"
+	repoRemoveForce = false
+	if err := runRepoRemove("research"); err != nil {
+		t.Fatalf("remove with folder error = %v", err)
+	}
+
+	if _, err := os.Stat(skillDir); !os.IsNotExist(err) {
+		t.Fatal("folder-organized skill directory not removed")
+	}
+	idx2, _ := scaffold.LoadLocalIndex(dir)
+	if _, ok := idx2.Skills["research"]; ok {
+		t.Fatal("research still in index after remove")
+	}
+}
+
 func TestRepoRemoveOnLegacyRegistry(t *testing.T) {
 	dir := scaffoldLegacyTestRegistry(t, "to-remove")
 	origDir, _ := os.Getwd()

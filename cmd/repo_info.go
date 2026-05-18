@@ -65,13 +65,17 @@ func runRepoInfo(name string) error {
 	fmt.Printf("Type:        %s\n", itemType.Singular())
 	fmt.Printf("Version:     %s\n", version)
 	fmt.Printf("Description: %s\n", entry.Description)
+	if entry.Folder != "" {
+		fmt.Printf("Folder:      %s\n", entry.Folder)
+	}
 
 	// Read manifest for more details — path resolved via the index's declared layout.
 	layout, err := registry.LayoutFor(idx)
 	if err != nil {
 		return err
 	}
-	itemDir := layout.ItemDir(dir, itemType, name)
+	subpath := registry.ItemSubPath(entry.Folder, name)
+	itemDir := layout.ItemDir(dir, itemType, subpath)
 	manifestPath := filepath.Join(itemDir, "manifest.json")
 	if data, err := os.ReadFile(manifestPath); err == nil {
 		var m registry.ItemManifest
@@ -101,7 +105,7 @@ func runRepoInfo(name string) error {
 		fmt.Printf("Skillsets:   %s\n", strings.Join(memberOf, ", "))
 	}
 
-	relItem := layout.RelativeItemPath(itemType, name)
+	relItem := layout.RelativeItemPath(itemType, subpath)
 	fmt.Printf("\nmanifest.json: %s/manifest.json\n", relItem)
 	fmt.Printf("Content:       %s/%s.md\n", relItem, itemType.Singular())
 

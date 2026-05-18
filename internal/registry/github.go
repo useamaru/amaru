@@ -87,6 +87,10 @@ type GitHubClient struct {
 	mirrorFactory ClientFactory
 	layout        Layout
 	source        indexSource
+	// cachedIndex holds the result of the first successful FetchIndex call so
+	// subsequent calls (including the implicit one in DownloadFiles, which
+	// needs an entry's Folder to compute the download path) are no-ops.
+	cachedIndex *RegistryIndex
 	// apiBase overrides the GitHub API base URL. Empty means production
 	// (https://api.github.com). Tests inject httptest server URLs here.
 	apiBase string
@@ -281,7 +285,13 @@ func (c *GitHubClient) apiRequest(ctx context.Context, path string) ([]byte, err
 // Tries amaru_registry.json first (sourceIndexed); on 404 falls back to a top-level
 // skills/ walk (sourceSynthesized, always flat). If the index declares mirrors,
 // fetches and merges them (primary registry wins on conflict).
+//
+// Subsequent calls return the same cached index — FetchIndex is idempotent
+// within a single client's lifetime.
 func (c *GitHubClient) FetchIndex(ctx context.Context) (*RegistryIndex, error) {
+	if c.cachedIndex != nil {
+		return c.cachedIndex, nil
+	}
 	var index *RegistryIndex
 
 	data, err := c.getFileContent(ctx, "amaru_registry.json", "")
@@ -330,6 +340,7 @@ func (c *GitHubClient) FetchIndex(ctx context.Context) (*RegistryIndex, error) {
 		}
 	}
 
+	c.cachedIndex = index
 	return index, nil
 }
 
@@ -679,13 +690,40 @@ func (c *GitHubClient) ListVersions(ctx context.Context, itemType, name string) 
 
 // DownloadFiles downloads all files for a specific item.
 // Layout-aware: nested layout downloads from .amaru_registry/<type>s/<name>/,
-// flat layout downloads from <type>s/<name>/. Synthesized-source registries
-// (foreign repos with no amaru_registry.json) also use the flat <type>s/<name>/
-// shape since the synthesizer reads top-level <type>s/ dirs.
+// flat layout downloads from <type>s/<name>/. If the index entry declares a
+// Folder, the source lives at <type>s/<folder>/<name>/ (folders are cosmetic
+// — they never affect the item's name elsewhere). Synthesized-source
+// registries (foreign repos with no amaru_registry.json) also use the flat
+// shape; their item names may themselves contain a single slash to address
+// nested foreign layouts (e.g. "cloud/bigquery").
 // Always downloads from default branch — version is metadata only.
 func (c *GitHubClient) DownloadFiles(ctx context.Context, itemType, name, version string) ([]File, error) {
-	dirPath := c.layout.RelativeItemPath(types.ItemType(itemType), name)
+	subpath := name
+	if folder := c.lookupFolder(ctx, itemType, name); folder != "" {
+		subpath = ItemSubPath(folder, name)
+	}
+	dirPath := c.layout.RelativeItemPath(types.ItemType(itemType), subpath)
 	return c.downloadDirectory(ctx, dirPath, "", "")
+}
+
+// lookupFolder returns the entry's Folder for a given item, fetching the index
+// if it hasn't been loaded yet. Returns "" on any error or when the entry is
+// missing — DownloadFiles will then try the flat path and let GitHub return
+// the appropriate 404 if the item doesn't exist.
+func (c *GitHubClient) lookupFolder(ctx context.Context, itemType, name string) string {
+	idx, err := c.FetchIndex(ctx)
+	if err != nil || idx == nil {
+		return ""
+	}
+	entries := idx.EntriesForType(types.ItemType(itemType))
+	if entries == nil {
+		return ""
+	}
+	entry, ok := entries[name]
+	if !ok {
+		return ""
+	}
+	return entry.Folder
 }
 
 // FetchSkillsetManifest downloads the manifest.json for a skillset from the registry.

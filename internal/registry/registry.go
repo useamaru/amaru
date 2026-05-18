@@ -109,6 +109,11 @@ func (idx *RegistryIndex) EntriesForType(t types.ItemType) map[string]RegistryEn
 
 // RegistryEntry is one skill or command in the registry index.
 //
+// Folder is an optional registry-side organization hint: when set, the item's
+// source lives at <typedir>/<folder>/<name>/ instead of <typedir>/<name>/.
+// Folders are cosmetic — they never affect the item's name, git tag, lock
+// entry, or install path. Empty means the item lives directly under <typedir>/.
+//
 // Source is a runtime-only provenance marker populated by MergeFrom for
 // entries that came from a mirror. It is intentionally non-serialized
 // (json:"-") — the registry contract on disk doesn't change. Empty Source
@@ -117,6 +122,7 @@ type RegistryEntry struct {
 	Latest      string   `json:"latest"`
 	Tags        []string `json:"tags,omitempty"`
 	Description string   `json:"description"`
+	Folder      string   `json:"folder,omitempty"`
 	Source      string   `json:"-"`
 }
 

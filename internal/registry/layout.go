@@ -1,10 +1,44 @@
 package registry
 
 import (
+	"fmt"
 	"path/filepath"
+	"regexp"
+	"strings"
 
 	"github.com/useamaru/amaru/internal/types"
 )
+
+// ItemSubPath returns the registry-internal subpath for an item, given an
+// optional folder. Empty folder yields just the name; otherwise it joins
+// folder/name with a forward slash. Use it to compute the argument passed to
+// Layout path methods (ItemDir, RelativeItemPath) when an entry declares a
+// Folder.
+func ItemSubPath(folder, name string) string {
+	if folder == "" {
+		return name
+	}
+	return folder + "/" + name
+}
+
+var validFolderPattern = regexp.MustCompile(`^[a-z][a-z0-9-]*(/[a-z][a-z0-9-]*)*$`)
+
+// ValidateFolder checks that a folder string is safe for use as a path
+// segment under a type directory. Empty is allowed (means "no folder").
+// Rules: forward-slash-separated lowercase tokens, each starting with a
+// letter, containing only letters/digits/hyphens.
+func ValidateFolder(folder string) error {
+	if folder == "" {
+		return nil
+	}
+	if strings.Contains(folder, "..") {
+		return fmt.Errorf("invalid folder %q: must not contain '..'", folder)
+	}
+	if !validFolderPattern.MatchString(folder) {
+		return fmt.Errorf("invalid folder %q: each segment must be lowercase alphanumeric with hyphens, starting with a letter, separated by /", folder)
+	}
+	return nil
+}
 
 // Layout encodes the on-disk arrangement of a registry repository.
 // It is the path-math half of the (layout, source) pair tracked alongside

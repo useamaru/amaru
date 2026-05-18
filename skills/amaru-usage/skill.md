@@ -96,6 +96,7 @@ amaru repo init /path/to/registry       # Scaffold empty v2 registry (flat layou
 amaru repo add my-skill                  # Create new skill with templates
 amaru repo add my-cmd --type command     # Create new command
 amaru repo add my-agent --type agent     # Create new agent
+amaru repo add bootstrap --folder dev    # Organize under skills/dev/bootstrap/ (folder is cosmetic — item is still named "bootstrap")
 amaru repo add pack --type skillset --items "skill/my-skill,command/my-cmd"
 amaru repo list                          # Show all items
 amaru repo validate                      # Check consistency

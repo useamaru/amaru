@@ -94,18 +94,26 @@ func runRepoValidate() error {
 
 func validateEntries(dir string, layout registry.Layout, itemType types.ItemType, entries map[string]registry.RegistryEntry, result *validateResult) {
 	for name, entry := range entries {
-		itemDir := layout.ItemDir(dir, itemType, name)
+		subpath := registry.ItemSubPath(entry.Folder, name)
+		itemDir := layout.ItemDir(dir, itemType, subpath)
+		display := itemType.DirName() + "/" + subpath
 
 		// Check name validity
 		if err := types.ValidateItemName(name); err != nil {
-			ui.Err("%s/%s — invalid name: %v", itemType.DirName(), name, err)
+			ui.Err("%s — invalid name: %v", display, err)
+			result.errors++
+			continue
+		}
+
+		if err := registry.ValidateFolder(entry.Folder); err != nil {
+			ui.Err("%s — %v", display, err)
 			result.errors++
 			continue
 		}
 
 		// Check directory exists
 		if _, err := os.Stat(itemDir); os.IsNotExist(err) {
-			ui.Err("%s/%s — directory not found", itemType.DirName(), name)
+			ui.Err("%s — directory not found", display)
 			result.errors++
 			continue
 		}
@@ -114,14 +122,14 @@ func validateEntries(dir string, layout registry.Layout, itemType types.ItemType
 		manifestPath := filepath.Join(itemDir, "manifest.json")
 		manifestData, err := os.ReadFile(manifestPath)
 		if err != nil {
-			ui.Err("%s/%s — manifest.json not found", itemType.DirName(), name)
+			ui.Err("%s — manifest.json not found", display)
 			result.errors++
 			continue
 		}
 
 		var manifest registry.ItemManifest
 		if err := json.Unmarshal(manifestData, &manifest); err != nil {
-			ui.Err("%s/%s — invalid manifest.json: %v", itemType.DirName(), name, err)
+			ui.Err("%s — invalid manifest.json: %v", display, err)
 			result.errors++
 			continue
 		}
@@ -130,14 +138,14 @@ func validateEntries(dir string, layout registry.Layout, itemType types.ItemType
 
 		// Check name matches
 		if manifest.Name != name {
-			ui.Err("%s/%s — manifest name %q does not match directory", itemType.DirName(), name, manifest.Name)
+			ui.Err("%s — manifest name %q does not match directory", display, manifest.Name)
 			result.errors++
 			continue
 		}
 
 		// Check type matches
 		if manifest.Type != itemType.Singular() {
-			ui.Err("%s/%s — manifest type %q does not match parent directory", itemType.DirName(), name, manifest.Type)
+			ui.Err("%s — manifest type %q does not match parent directory", display, manifest.Type)
 			result.errors++
 			continue
 		}
@@ -146,7 +154,7 @@ func validateEntries(dir string, layout registry.Layout, itemType types.ItemType
 		for _, f := range manifest.Files {
 			fPath := filepath.Join(itemDir, f)
 			if _, err := os.Stat(fPath); os.IsNotExist(err) {
-				ui.Warn("%s/%s — listed file %q not found", itemType.DirName(), name, f)
+				ui.Warn("%s — listed file %q not found", display, f)
 				result.warnings++
 				hasWarnings = true
 			}
@@ -154,40 +162,71 @@ func validateEntries(dir string, layout registry.Layout, itemType types.ItemType
 
 		// Check description drift (warning)
 		if entry.Description != manifest.Description {
-			ui.Warn("%s/%s — description differs between index and manifest", itemType.DirName(), name)
+			ui.Warn("%s — description differs between index and manifest", display)
 			result.warnings++
 			hasWarnings = true
 		}
 
 		// Check version drift (warning)
 		if entry.Latest != "" && entry.Latest != manifest.Version {
-			ui.Warn("%s/%s — index latest %q differs from manifest version %q", itemType.DirName(), name, entry.Latest, manifest.Version)
+			ui.Warn("%s — index latest %q differs from manifest version %q", display, entry.Latest, manifest.Version)
 			result.warnings++
 			hasWarnings = true
 		}
 
 		if !hasWarnings {
-			ui.Check("%s/%s — OK", itemType.DirName(), name)
+			ui.Check("%s — OK", display)
 		}
 		result.ok++
 	}
 }
 
+// checkOrphans walks the type directory one level deep and flags any directory
+// that doesn't correspond to an indexed entry. A directory at the top level
+// that contains a manifest.json is treated as a flat item; a directory without
+// one is treated as a folder and we recurse into its children. Items recorded
+// in the index with a Folder are matched only if found at the expected path.
 func checkOrphans(dir string, layout registry.Layout, itemType types.ItemType, entries map[string]registry.RegistryEntry, result *validateResult) {
 	typeDir := layout.TypeDir(dir, itemType)
-	dirEntries, err := os.ReadDir(typeDir)
+	topLevel, err := os.ReadDir(typeDir)
 	if err != nil {
 		return
 	}
 
-	for _, de := range dirEntries {
+	indexedByPath := make(map[string]bool, len(entries))
+	for name, entry := range entries {
+		indexedByPath[registry.ItemSubPath(entry.Folder, name)] = true
+	}
+
+	for _, de := range topLevel {
 		if !de.IsDir() {
 			continue
 		}
-		name := de.Name()
-		if _, exists := entries[name]; !exists {
-			ui.Warn("%s/%s — orphaned directory (not in index)", itemType.DirName(), name)
-			result.warnings++
+		childName := de.Name()
+		childPath := filepath.Join(typeDir, childName)
+
+		// A child with manifest.json is a flat item. A child without is a folder.
+		if _, err := os.Stat(filepath.Join(childPath, "manifest.json")); err == nil {
+			if !indexedByPath[childName] {
+				ui.Warn("%s/%s — orphaned directory (not in index)", itemType.DirName(), childName)
+				result.warnings++
+			}
+			continue
+		}
+
+		grand, err := os.ReadDir(childPath)
+		if err != nil {
+			continue
+		}
+		for _, ge := range grand {
+			if !ge.IsDir() {
+				continue
+			}
+			subpath := childName + "/" + ge.Name()
+			if !indexedByPath[subpath] {
+				ui.Warn("%s/%s — orphaned directory (not in index)", itemType.DirName(), subpath)
+				result.warnings++
+			}
 		}
 	}
 }

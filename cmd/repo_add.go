@@ -22,6 +22,7 @@ var (
 	repoAddAuthor      string
 	repoAddTags        string
 	repoAddItems       string
+	repoAddFolder      string
 )
 
 var repoAddCmd = &cobra.Command{
@@ -40,6 +41,7 @@ func init() {
 	repoAddCmd.Flags().StringVarP(&repoAddAuthor, "author", "a", "", "Author name (defaults to git user.name)")
 	repoAddCmd.Flags().StringVar(&repoAddTags, "tags", "", "Comma-separated tags")
 	repoAddCmd.Flags().StringVar(&repoAddItems, "items", "", "Comma-separated type/name members (required for skillsets)")
+	repoAddCmd.Flags().StringVar(&repoAddFolder, "folder", "", "Organize the item under <typedir>/<folder>/<name>/ (cosmetic; folder is not part of the item name)")
 	repoCmd.AddCommand(repoAddCmd)
 }
 
@@ -65,6 +67,10 @@ func runRepoAdd(name string) error {
 	itemType := types.ItemType(repoAddType)
 	if itemType != types.Skill && itemType != types.Command && itemType != types.Agent {
 		return fmt.Errorf("invalid item type %q: must be skill, command, agent, or skillset", repoAddType)
+	}
+
+	if err := registry.ValidateFolder(repoAddFolder); err != nil {
+		return err
 	}
 
 	// Check for name collision across all types
@@ -95,12 +101,13 @@ func runRepoAdd(name string) error {
 		}
 	}
 
-	// Create directory using the index's declared layout.
+	// Create directory using the index's declared layout (+ optional folder).
 	layout, err := registry.LayoutFor(idx)
 	if err != nil {
 		return err
 	}
-	itemDir := layout.ItemDir(dir, itemType, name)
+	subpath := registry.ItemSubPath(repoAddFolder, name)
+	itemDir := layout.ItemDir(dir, itemType, subpath)
 	if err := os.MkdirAll(itemDir, 0755); err != nil {
 		return fmt.Errorf("creating directory: %w", err)
 	}
@@ -129,6 +136,7 @@ func runRepoAdd(name string) error {
 		Latest:      "",
 		Description: description,
 		Tags:        tags,
+		Folder:      repoAddFolder,
 	}
 	scaffold.SetEntriesForType(idx, itemType, entries)
 	scaffold.TouchUpdatedAt(idx)
@@ -138,7 +146,7 @@ func runRepoAdd(name string) error {
 	}
 
 	ui.Check("Created %s %q", itemType.Singular(), name)
-	relItem := layout.RelativeItemPath(itemType, name)
+	relItem := layout.RelativeItemPath(itemType, subpath)
 	fmt.Printf("  Directory: %s/\n", relItem)
 	fmt.Printf("  Content:   %s/%s.md\n", relItem, itemType.Singular())
 	fmt.Printf("\n  Next steps:\n")
