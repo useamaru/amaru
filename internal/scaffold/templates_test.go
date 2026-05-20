@@ -14,9 +14,9 @@ func TestItemManifestFor(t *testing.T) {
 		wantFile string
 		wantType string
 	}{
-		{"skill", types.Skill, "skill.md", "skill"},
-		{"command", types.Command, "command.md", "command"},
-		{"agent", types.Agent, "agent.md", "agent"},
+		{"skill", types.Skill, "SKILL.md", "skill"},
+		{"command", types.Command, "COMMAND.md", "command"},
+		{"agent", types.Agent, "AGENT.md", "agent"},
 	}
 
 	for _, tt := range tests {

@@ -123,8 +123,8 @@ func runRepoAdd(name string) error {
 		return fmt.Errorf("writing manifest.json: %w", err)
 	}
 
-	// Write content file
-	contentFile := fmt.Sprintf("%s.md", itemType.Singular())
+	// Write content file (uppercase by default — matches Anthropic SKILL.md convention)
+	contentFile := scaffold.ContentFilename(itemType)
 	content := scaffold.ContentTemplateFor(itemType, name, description)
 	if err := os.WriteFile(filepath.Join(itemDir, contentFile), []byte(content), 0644); err != nil {
 		return fmt.Errorf("writing %s: %w", contentFile, err)
@@ -148,9 +148,9 @@ func runRepoAdd(name string) error {
 	ui.Check("Created %s %q", itemType.Singular(), name)
 	relItem := layout.RelativeItemPath(itemType, subpath)
 	fmt.Printf("  Directory: %s/\n", relItem)
-	fmt.Printf("  Content:   %s/%s.md\n", relItem, itemType.Singular())
+	fmt.Printf("  Content:   %s/%s\n", relItem, contentFile)
 	fmt.Printf("\n  Next steps:\n")
-	fmt.Printf("    1. Edit %s/%s.md\n", relItem, itemType.Singular())
+	fmt.Printf("    1. Edit %s/%s\n", relItem, contentFile)
 	fmt.Printf("    2. amaru repo tag %s 1.0.0 --type %s\n", name, itemType.Singular())
 
 	return nil

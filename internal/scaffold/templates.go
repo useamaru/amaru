@@ -2,14 +2,23 @@ package scaffold
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/useamaru/amaru/internal/registry"
 	"github.com/useamaru/amaru/internal/types"
 )
 
+// ContentFilename returns the canonical (uppercase) on-disk filename for a
+// given item type — e.g. SKILL.md, COMMAND.md, AGENT.md. amaru's readers
+// still accept the lowercase form for back-compat, but new items are written
+// uppercase to match the Anthropic convention.
+func ContentFilename(itemType types.ItemType) string {
+	return strings.ToUpper(itemType.Singular()) + ".md"
+}
+
 // ItemManifestFor creates a manifest.json struct for the given item type.
 func ItemManifestFor(itemType types.ItemType, name, description, author string, tags []string) registry.ItemManifest {
-	contentFile := fmt.Sprintf("%s.md", itemType.Singular())
+	contentFile := ContentFilename(itemType)
 	return registry.ItemManifest{
 		Name:        name,
 		Type:        itemType.Singular(),
@@ -21,7 +30,7 @@ func ItemManifestFor(itemType types.ItemType, name, description, author string, 
 	}
 }
 
-// SkillTemplate returns the template content for a new skill.md file.
+// SkillTemplate returns the template content for a new SKILL.md file.
 func SkillTemplate(name, description string) string {
 	return fmt.Sprintf(`---
 description: %s
@@ -37,7 +46,7 @@ TODO: Add usage instructions and examples.
 `, description, name)
 }
 
-// CommandTemplate returns the template content for a new command.md file.
+// CommandTemplate returns the template content for a new COMMAND.md file.
 func CommandTemplate(name, description string) string {
 	return fmt.Sprintf(`---
 description: %s
@@ -53,7 +62,7 @@ TODO: Describe what this command does.
 `, description, name)
 }
 
-// AgentTemplate returns the template content for a new agent.md file.
+// AgentTemplate returns the template content for a new AGENT.md file.
 func AgentTemplate(name, description string) string {
 	return fmt.Sprintf(`---
 description: %s

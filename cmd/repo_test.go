@@ -153,9 +153,12 @@ func TestRepoAddCreatesSkill(t *testing.T) {
 		t.Errorf("manifest author = %q, want %q", m.Author, "tester")
 	}
 
-	// Verify content file exists
-	if _, err := os.Stat(filepath.Join(skillDir, "skill.md")); os.IsNotExist(err) {
-		t.Fatal("skill.md not created")
+	// Verify content file exists (uppercase by default, Anthropic convention)
+	if _, err := os.Stat(filepath.Join(skillDir, "SKILL.md")); os.IsNotExist(err) {
+		t.Fatal("SKILL.md not created")
+	}
+	if _, err := os.Stat(filepath.Join(skillDir, "skill.md")); err == nil {
+		t.Error("lowercase skill.md should not be created by default")
 	}
 
 	// Verify index was updated
@@ -224,8 +227,8 @@ func TestRepoAddCommand(t *testing.T) {
 
 	// Verify command directory at flat path.
 	cmdDir := filepath.Join(dir, "commands", "my-cmd")
-	if _, err := os.Stat(filepath.Join(cmdDir, "command.md")); os.IsNotExist(err) {
-		t.Fatal("command.md not created")
+	if _, err := os.Stat(filepath.Join(cmdDir, "COMMAND.md")); os.IsNotExist(err) {
+		t.Fatal("COMMAND.md not created")
 	}
 
 	idx, _ := scaffold.LoadLocalIndex(dir)
