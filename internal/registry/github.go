@@ -94,6 +94,11 @@ type GitHubClient struct {
 	// apiBase overrides the GitHub API base URL. Empty means production
 	// (https://api.github.com). Tests inject httptest server URLs here.
 	apiBase string
+	// snap holds the whole default branch, fetched as one tarball on the first
+	// directory download. Nil means "not loaded, or unavailable" — every read
+	// falls back to the per-file contents API.
+	snapOnce sync.Once
+	snap     *snapshot
 }
 
 // NewGitHubClient creates a new GitHub registry client from a URL like "github:org/repo".
@@ -444,10 +449,10 @@ func (c *GitHubClient) scanSynthesizedType(ctx context.Context, t types.ItemType
 	// means the child is a flat item; a missing content file means it's a
 	// namespace and we need to recurse into it.
 	type probeResult struct {
-		flatHit     bool
-		flatDesc    string
-		namespace   string // non-empty when the child is a namespace dir
-		err         error
+		flatHit   bool
+		flatDesc  string
+		namespace string // non-empty when the child is a namespace dir
+		err       error
 	}
 	probes := make([]probeResult, len(topDirs))
 
@@ -750,6 +755,15 @@ func (c *GitHubClient) FetchSkillsetManifest(ctx context.Context, name, _ string
 // downloadDirectory recursively downloads all files in a directory at a given ref.
 // Files within each directory level are fetched in parallel.
 func (c *GitHubClient) downloadDirectory(ctx context.Context, dirPath, ref, relativeBase string) ([]File, error) {
+	// One tarball serves every member of a skillset; only a pinned ref (never
+	// produced by DownloadFiles, which always reads the default branch) and a
+	// directory the snapshot doesn't carry fall through to the API.
+	if ref == "" {
+		if snap := c.loadSnapshot(ctx); snap != nil && snap.hasDir(dirPath) {
+			return filesFromSnapshot(snap, dirPath, relativeBase), nil
+		}
+	}
+
 	path := fmt.Sprintf("contents/%s", dirPath)
 	if ref != "" {
 		path += "?ref=" + ref
@@ -848,6 +862,16 @@ func (c *GitHubClient) downloadDirectory(ctx context.Context, dirPath, ref, rela
 
 // getFileContent fetches a file's content from the GitHub API.
 func (c *GitHubClient) getFileContent(ctx context.Context, filePath, ref string) ([]byte, error) {
+	// Only an already-loaded snapshot serves single files: fetching a whole
+	// repository to answer one read would cost more than the request it saves.
+	if ref == "" {
+		if snap := c.cachedSnapshot(); snap != nil {
+			if content, ok := snap.file(filePath); ok {
+				return content, nil
+			}
+		}
+	}
+
 	path := fmt.Sprintf("contents/%s", filePath)
 	if ref != "" {
 		path += "?ref=" + ref
@@ -875,4 +899,28 @@ func (c *GitHubClient) getFileContent(ctx context.Context, filePath, ref string)
 		return nil, fmt.Errorf("decoding base64 content: %w", err)
 	}
 	return decoded, nil
+}
+
+// filesFromSnapshot materializes a directory out of the snapshot.
+//
+// snap is the loaded repository tree; dirPath is the repo-relative directory;
+// relativeBase prefixes every returned path, matching downloadDirectory's
+// recursive contract. Returns the files in deterministic path order.
+func filesFromSnapshot(snap *snapshot, dirPath, relativeBase string) []File {
+	entries := snap.filesUnder(dirPath)
+	relPaths := make([]string, 0, len(entries))
+	for relPath := range entries {
+		relPaths = append(relPaths, relPath)
+	}
+	sort.Strings(relPaths)
+
+	files := make([]File, 0, len(relPaths))
+	for _, relPath := range relPaths {
+		outPath := relPath
+		if relativeBase != "" {
+			outPath = relativeBase + "/" + relPath
+		}
+		files = append(files, File{Path: outPath, Content: entries[relPath]})
+	}
+	return files
 }

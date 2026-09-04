@@ -509,6 +509,8 @@ Detection is automatic: if a top-level child of `skills/` has a `SKILL.md`/`skil
 
 amaru accesses registries through the GitHub API for installable items. For context sync, it uses sparse checkout via Sapling (preferred) or Git.
 
+The first item download pulls the registry's default branch as a single tarball and serves every later read from memory, so installing a 33-member skillset costs one request instead of ~130 — round-trip latency, not bandwidth, was the whole cost. The registry index and any read taken before that first download still use the contents API. Set `AMARU_NO_SNAPSHOT=1` to force the per-file path (useful when bisecting a registry issue).
+
 ## VCS Support
 
 amaru supports two version control backends for context sync:

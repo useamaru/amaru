@@ -7,7 +7,7 @@ import (
 // Sobrescrita no release pelo ldflags do GoReleaser (-X ...cmd.version);
 // o valor aqui vale para builds de desenvolvimento e é o que o check-version
 // da CI exige bumpar a cada PR.
-var version = "0.6.0"
+var version = "0.6.1"
 
 var rootCmd = &cobra.Command{
 	Use:   "amaru",

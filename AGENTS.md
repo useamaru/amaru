@@ -7,7 +7,7 @@ amaru (CLI entry point)
 ├── cmd/           — Cobra commands: init, add, install, update, check, list, browse, ignore, context, repo
 ├── internal/
 │   ├── manifest/  — amaru.json + amaru.lock read/write (Manifest, Lock, DependencySpec)
-│   ├── registry/  — GitHub API client, RegistryIndex, SkillsetEntry, authentication; Layout (v1 nested vs v2 flat) + path math; deprecation warning for v1 reads
+│   ├── registry/  — GitHub API client, RegistryIndex, SkillsetEntry, authentication; Layout (v1 nested vs v2 flat) + path math; deprecation warning for v1 reads; snapshot.go serves file reads from one per-repo tarball
 │   ├── installer/ — Write files to .claude/{skills,commands,agents}/, compute content hashes
 │   ├── checker/   — Compare lock against registries: detect updates + local drift
 │   ├── resolver/  — Semver constraint resolution (^, ~, exact) + version classification
